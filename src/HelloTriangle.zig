@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const vk = @import("vk.zig");
 // const glfw = @cImport(
 //     @cInclude("GLFW/glfw3.h"),
@@ -25,6 +26,7 @@ const apis: []const vk.ApiInfo = &.{
         .base_commands = .{
             .createInstance = true,
             .enumerateInstanceExtensionProperties = true,
+            .enumerateInstanceLayerProperties = true,
             .getInstanceProcAddr = true,
         },
         .instance_commands = .{
@@ -32,7 +34,7 @@ const apis: []const vk.ApiInfo = &.{
             .destroyInstance = true,
         },
     },
-    // vk.features.version_1_0,
+    vk.features.version_1_0,
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
@@ -51,8 +53,12 @@ fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("glfw: {}: {s}\n", .{ error_code, description });
 }
 
-// pub extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
+const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 
+const enable_validation_layers: bool = switch (builtin.mode) {
+    .Debug, .ReleaseSafe => true,
+    else => false,
+};
 pub fn init(allocator: Allocator) HelloTriangleApp {
     return HelloTriangleApp{ .allocator = allocator };
 }
@@ -93,12 +99,10 @@ fn initVulkan(self: *HelloTriangleApp) !void {
 }
 
 fn createInstance(self: *HelloTriangleApp) !void {
-    // const func_ptr = glfw.getInstanceProcAddress(null, "vkCreateInstance") orelse {
-    //     log.err("Failed to load instance proc {?s}\n", .{glfw.getErrorString()});
-    //     std.process.exit(1);
-    // };
-    // const func: vk.PfnGetInstanceProcAddr = @ptrCast(func_ptr);
     self.vkb = try BaseDispatch.load(@as(vk.PfnGetInstanceProcAddr, @ptrCast(&glfw.getInstanceProcAddress)));
+    if (enable_validation_layers and !try self.checkValidationLayerSupport()) {
+        return error.RequestedValidationLayerNotAvailable;
+    }
     const glfw_exts = glfw.getRequiredInstanceExtensions() orelse return blk: {
         const err = glfw.mustGetError();
         log.err("failed to get required instance extensions: error={s}", .{err.description});
@@ -131,21 +135,51 @@ fn createInstance(self: *HelloTriangleApp) !void {
         .api_version = vk.API_VERSION_1_0,
     };
 
-    const createInfo: vk.InstanceCreateInfo = .{
+    var createInfo: vk.InstanceCreateInfo = .{
         .p_application_info = &appInfo,
         .p_next = null,
         .enabled_extension_count = @intCast(glfw_exts.len),
         .pp_enabled_extension_names = @ptrCast(glfw_exts),
     };
-    // std.log.debug("\ncreateInfo value {any}", .{createInfo});
-    // std.log.debug("\nvkb value {any}", .{self.vkb});
-    // std.log.debug("\ndispatch value {any}", .{self.vkb.dispatch});
+    if (enable_validation_layers) {
+        createInfo.enabled_layer_count = validation_layers.len;
+        createInfo.pp_enabled_layer_names = &validation_layers;
+    }
     const instance = try self.vkb.createInstance(&createInfo, null);
 
     self.vki = try self.allocator.create(InstanceDispatch);
     self.vki.* = try InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr);
     self.instance = Instance.init(instance, self.vki);
     errdefer self.instance.destroyInstance(null);
+}
+
+fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
+    // var layerCount: u32 = undefined;
+    // _ = try self.vkb.enumerateInstanceLayerProperties(&layerCount, null);
+
+    // var available_layers = try self.allocator.alloc(vk.LayerProperties, layerCount);
+    // defer self.allocator.free(available_layers);
+    // _ = try self.vkb.enumerateInstanceLayerProperties(&layerCount, available_layers.ptr);
+    //
+    log.debug("in check validation layer", .{});
+    const available_layers = try self.vkb.enumerateInstanceLayerPropertiesAlloc(self.allocator);
+    defer self.allocator.free(available_layers);
+    log.debug("available layers", .{});
+
+    for (validation_layers, 0..) |layer_name, i| {
+        log.debug("validation layer {d}, {s}", .{ i, layer_name });
+        var layerFound = false;
+        for (available_layers) |available_layer| {
+            if (std.mem.eql(u8, std.mem.span(layer_name), std.mem.sliceTo(&available_layer.layer_name, 0))) {
+                layerFound = true;
+                break;
+            }
+        }
+        if (!layerFound) {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn mainLoop(self: HelloTriangleApp) !void {
