@@ -34,7 +34,7 @@ const apis: []const vk.ApiInfo = &.{
             .destroyInstance = true,
         },
     },
-    vk.features.version_1_0,
+    // vk.features.version_1_0,
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
@@ -54,6 +54,8 @@ fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
 }
 
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+
+// const required
 
 const enable_validation_layers: bool = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
@@ -181,6 +183,8 @@ fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
     }
     return true;
 }
+
+// fn getRequiredExtensions()
 
 fn mainLoop(self: HelloTriangleApp) !void {
     while (!self.window.shouldClose()) {
