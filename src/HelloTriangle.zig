@@ -55,14 +55,12 @@ fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
 
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 
-// const required
-
 const enable_validation_layers: bool = switch (builtin.mode) {
     .Debug, .ReleaseSafe => true,
     else => false,
 };
 pub fn init(allocator: Allocator) HelloTriangleApp {
-    return HelloTriangleApp{ .allocator = allocator };
+    return .{ .allocator = allocator };
 }
 
 pub fn run(self: *HelloTriangleApp) !void {
@@ -105,15 +103,13 @@ fn createInstance(self: *HelloTriangleApp) !void {
     if (enable_validation_layers and !try self.checkValidationLayerSupport()) {
         return error.RequestedValidationLayerNotAvailable;
     }
-    const glfw_exts = glfw.getRequiredInstanceExtensions() orelse return blk: {
-        const err = glfw.mustGetError();
-        log.err("failed to get required instance extensions: error={s}", .{err.description});
-        break :blk error.FailedInstanceInit;
-    };
 
-    var instance_exts = try std.ArrayList([*:0]const u8).initCapacity(self.allocator, glfw_exts.len + 1);
+    const extensions = try getRequiredExtensions(self.allocator);
+    defer extensions.deinit();
+
+    var instance_exts = try std.ArrayList([*:0]const u8).initCapacity(self.allocator, extensions.items.len + 1);
     defer instance_exts.deinit();
-    try instance_exts.appendSlice(glfw_exts);
+    try instance_exts.appendSlice(extensions.items);
 
     var count: u32 = undefined;
     _ = try self.vkb.enumerateInstanceExtensionProperties(null, &count, null);
@@ -140,8 +136,8 @@ fn createInstance(self: *HelloTriangleApp) !void {
     var createInfo: vk.InstanceCreateInfo = .{
         .p_application_info = &appInfo,
         .p_next = null,
-        .enabled_extension_count = @intCast(glfw_exts.len),
-        .pp_enabled_extension_names = @ptrCast(glfw_exts),
+        .enabled_extension_count = @intCast(extensions.items.len),
+        .pp_enabled_extension_names = @ptrCast(extensions.items.ptr),
     };
     if (enable_validation_layers) {
         createInfo.enabled_layer_count = validation_layers.len;
@@ -184,7 +180,20 @@ fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
     return true;
 }
 
-// fn getRequiredExtensions()
+fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const u8, null) {
+    var extensions = std.ArrayList([*:0]const u8).init(allocator);
+    const glfw_exts = glfw.getRequiredInstanceExtensions() orelse return blk: {
+        const err = glfw.mustGetError();
+        log.err("failed to get required instance extensions: error={s}", .{err.description});
+        break :blk error.FailedInstanceInit;
+    };
+    try extensions.appendSlice(glfw_exts);
+
+    if (enable_validation_layers) {
+        try extensions.append(vk.extensions.ext_debug_utils.name);
+    }
+    return extensions;
+}
 
 fn mainLoop(self: HelloTriangleApp) !void {
     while (!self.window.shouldClose()) {
