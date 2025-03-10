@@ -28,8 +28,8 @@
         //     .hash = "1220ca0fc58588dbcc38ecfb7dab23f281ba55a8dc76d6efd32afd881e96ffd13605",
         // },
         .mach_glfw = .{
-            .url = "git+https://github.com/DonMatano/mach-glfw/#ca1e7df11ebb0ccea3390b96f27895d995532580",
-            .hash = "122025efff3c1b998d5690a184a718f11ddc4b0391364145cac8960b90f59c0ac1b9",
+            .url = "git+https://github.com/DonMatano/mach-glfw/#a811822fad3b4d857af791b72af9ce0a18ceaaa6",
+            .hash = "122064a822f836cdf469d59d232400d6c60c49b0115ba990d4a51d1a98cf4d388e58",
         },
     },
     .paths = .{
