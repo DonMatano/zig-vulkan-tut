@@ -107,6 +107,11 @@ fn initWindow(self: *HelloTriangleApp) GLFWErrors!void {
 fn initVulkan(self: *HelloTriangleApp) !void {
     self.createInstance() catch |err| {
         log.err("Error creating an instance, got err {}", .{err});
+        return error.CreateInstanceError;
+    };
+    self.setupDebugMessenger() catch |err| {
+        log.err("Error setting up debug messenger {}", .{err});
+        return error.DebugMessengerCreationFailed;
     };
 }
 
@@ -166,11 +171,11 @@ fn createInstance(self: *HelloTriangleApp) !void {
     errdefer self.instance.destroyInstance(null);
 }
 
-fn setupDebugMessenger(self: *HelloTriangleApp) void {
+fn setupDebugMessenger(self: *HelloTriangleApp) !void {
     if (!enable_validation_layers) return;
     var createDebugInfo: vk.DebugUtilsMessengerCreateInfoEXT = undefined;
     populateDebugMessengerCreateInfo(&createDebugInfo);
-    self.debug_messenger = try self.vki.createDebugUtilsMessengerEXT(self.instance, &createDebugInfo, null);
+    self.debug_messenger = try self.instance.createDebugUtilsMessengerEXT(&createDebugInfo, null);
 }
 
 fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
@@ -234,6 +239,8 @@ fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const 
     return extensions;
 }
 
+fn pickPhysicalDevice() !void {}
+
 fn mainLoop(self: HelloTriangleApp) !void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
@@ -241,7 +248,10 @@ fn mainLoop(self: HelloTriangleApp) !void {
 }
 
 fn cleanUp(self: *HelloTriangleApp) void {
-    if (enable_validation_layers and self.debug_messenger != .null_handle) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
+    if (enable_validation_layers and self.debug_messenger != .null_handle) self.instance.destroyDebugUtilsMessengerEXT(
+        self.debug_messenger,
+        null,
+    );
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.vki);
     self.window.destroy();
