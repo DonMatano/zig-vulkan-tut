@@ -19,9 +19,6 @@ const width = 800;
 const height = 600;
 
 const apis: []const vk.ApiInfo = &.{
-    // .{ .base_commands = .{
-    //     .createInstance = true,
-    // } },
     .{
         .base_commands = .{
             .createInstance = true,
@@ -32,9 +29,10 @@ const apis: []const vk.ApiInfo = &.{
         .instance_commands = .{
             .createDevice = true,
             .destroyInstance = true,
+            .createDebugUtilsMessengerEXT = enable_validation_layers,
+            .destroyDebugUtilsMessengerEXT = enable_validation_layers,
         },
     },
-    // vk.features.version_1_0,
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
@@ -45,12 +43,26 @@ instance: Instance = undefined,
 window: glfw.Window = undefined,
 vkb: BaseDispatch = undefined,
 vki: *InstanceDispatch = undefined,
+debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
 
 allocator: Allocator,
 
 /// Default GLFW error handling callback
 fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
     std.log.err("glfw: {}: {s}\n", .{ error_code, description });
+}
+
+fn debugCallBack(
+    _: vk.DebugUtilsMessageSeverityFlagsEXT,
+    _: vk.DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
+    _: ?*anyopaque,
+) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    if (p_callback_data != null) {
+        std.log.debug("validation layer: {?s}", .{p_callback_data.?.p_message});
+    }
+
+    return vk.FALSE;
 }
 
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
@@ -139,9 +151,12 @@ fn createInstance(self: *HelloTriangleApp) !void {
         .enabled_extension_count = @intCast(extensions.items.len),
         .pp_enabled_extension_names = @ptrCast(extensions.items.ptr),
     };
+    var createDebugInfo: vk.DebugUtilsMessengerCreateInfoEXT = undefined;
     if (enable_validation_layers) {
         createInfo.enabled_layer_count = validation_layers.len;
         createInfo.pp_enabled_layer_names = &validation_layers;
+        populateDebugMessengerCreateInfo(&createDebugInfo);
+        createInfo.p_next = &createDebugInfo;
     }
     const instance = try self.vkb.createInstance(&createInfo, null);
 
@@ -149,6 +164,13 @@ fn createInstance(self: *HelloTriangleApp) !void {
     self.vki.* = try InstanceDispatch.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr);
     self.instance = Instance.init(instance, self.vki);
     errdefer self.instance.destroyInstance(null);
+}
+
+fn setupDebugMessenger(self: *HelloTriangleApp) void {
+    if (!enable_validation_layers) return;
+    var createDebugInfo: vk.DebugUtilsMessengerCreateInfoEXT = undefined;
+    populateDebugMessengerCreateInfo(&createDebugInfo);
+    self.debug_messenger = try self.vki.createDebugUtilsMessengerEXT(self.instance, &createDebugInfo, null);
 }
 
 fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
@@ -180,6 +202,23 @@ fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
     return true;
 }
 
+fn populateDebugMessengerCreateInfo(createDebugInfo: *vk.DebugUtilsMessengerCreateInfoEXT) void {
+    createDebugInfo.* = .{
+        .message_severity = .{
+            .verbose_bit_ext = true,
+            .warning_bit_ext = true,
+            .error_bit_ext = true,
+        },
+        .message_type = .{
+            .general_bit_ext = true,
+            .validation_bit_ext = true,
+            .performance_bit_ext = true,
+        },
+        .pfn_user_callback = debugCallBack,
+        .p_user_data = null,
+    };
+}
+
 fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const u8, null) {
     var extensions = std.ArrayList([*:0]const u8).init(allocator);
     const glfw_exts = glfw.getRequiredInstanceExtensions() orelse return blk: {
@@ -202,6 +241,7 @@ fn mainLoop(self: HelloTriangleApp) !void {
 }
 
 fn cleanUp(self: *HelloTriangleApp) void {
+    if (enable_validation_layers and self.debug_messenger != .null_handle) self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.vki);
     self.window.destroy();
