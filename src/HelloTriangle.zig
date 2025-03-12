@@ -1,9 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const vk = @import("vk.zig");
-// const glfw = @cImport(
-//     @cInclude("GLFW/glfw3.h"),
-// );
 const glfw = @import("mach-glfw");
 
 const HelloTriangleApp = @This();
@@ -31,21 +28,34 @@ const apis: []const vk.ApiInfo = &.{
             .destroyInstance = true,
             .createDebugUtilsMessengerEXT = enable_validation_layers,
             .destroyDebugUtilsMessengerEXT = enable_validation_layers,
+            .enumeratePhysicalDevices = true,
+            .getPhysicalDeviceQueueFamilyProperties = true,
         },
     },
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
 const InstanceDispatch = vk.InstanceWrapper(apis);
+const DeviceDispatch = vk.DeviceWrapper(apis);
+
 const Instance = vk.InstanceProxy(apis);
+const Device = vk.DeviceProxy(apis);
 
 instance: Instance = undefined,
 window: glfw.Window = undefined,
 vkb: BaseDispatch = undefined,
 vki: *InstanceDispatch = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
+physical_device: vk.PhysicalDevice = .null_handle,
 
 allocator: Allocator,
+
+const QueueFamilyIndices = struct {
+    graphicsFamily: ?u32 = null,
+    pub fn isComplete(self: QueueFamilyIndices) bool {
+        return self.graphicsFamily != null;
+    }
+};
 
 /// Default GLFW error handling callback
 fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
@@ -113,6 +123,10 @@ fn initVulkan(self: *HelloTriangleApp) !void {
         log.err("Error setting up debug messenger {}", .{err});
         return error.DebugMessengerCreationFailed;
     };
+    self.pickPhysicalDevice() catch |err| {
+        log.err("Error picking physical device {}", .{err});
+        return error.PickPhysicalDeviceFailed;
+    };
 }
 
 fn createInstance(self: *HelloTriangleApp) !void {
@@ -179,17 +193,8 @@ fn setupDebugMessenger(self: *HelloTriangleApp) !void {
 }
 
 fn checkValidationLayerSupport(self: *HelloTriangleApp) !bool {
-    // var layerCount: u32 = undefined;
-    // _ = try self.vkb.enumerateInstanceLayerProperties(&layerCount, null);
-
-    // var available_layers = try self.allocator.alloc(vk.LayerProperties, layerCount);
-    // defer self.allocator.free(available_layers);
-    // _ = try self.vkb.enumerateInstanceLayerProperties(&layerCount, available_layers.ptr);
-    //
-    log.debug("in check validation layer", .{});
     const available_layers = try self.vkb.enumerateInstanceLayerPropertiesAlloc(self.allocator);
     defer self.allocator.free(available_layers);
-    log.debug("available layers", .{});
 
     for (validation_layers, 0..) |layer_name, i| {
         log.debug("validation layer {d}, {s}", .{ i, layer_name });
@@ -239,7 +244,42 @@ fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const 
     return extensions;
 }
 
-fn pickPhysicalDevice() !void {}
+fn pickPhysicalDevice(self: *HelloTriangleApp) !void {
+    const devices = try self.instance.enumeratePhysicalDevicesAlloc(self.allocator);
+    defer self.allocator.free(devices);
+
+    for (devices) |device| {
+        if (try self.isDeviceSuitable(device)) {
+            self.physical_device = device;
+            break;
+        }
+    }
+    if (self.physical_device == .null_handle) {
+        return error.FailedToFindSuitableGPU;
+    }
+}
+
+fn isDeviceSuitable(self: *HelloTriangleApp, device: vk.PhysicalDevice) !bool {
+    const indices = try self.findQueueFamilies(device);
+    return indices.isComplete();
+}
+
+fn findQueueFamilies(self: *HelloTriangleApp, device: vk.PhysicalDevice) !QueueFamilyIndices {
+    var indices: QueueFamilyIndices = .{};
+    const queue_families = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(device, self.allocator);
+    defer self.allocator.free(queue_families);
+
+    for (queue_families, 0..) |queue_family, i| {
+        if (queue_family.queue_flags.graphics_bit) {
+            indices.graphicsFamily = @intCast(i);
+        }
+        if (indices.isComplete()) {
+            break;
+        }
+    }
+
+    return indices;
+}
 
 fn mainLoop(self: HelloTriangleApp) !void {
     while (!self.window.shouldClose()) {
