@@ -16,22 +16,23 @@ const width = 800;
 const height = 600;
 
 const apis: []const vk.ApiInfo = &.{
-    .{
-        .base_commands = .{
-            .createInstance = true,
-            .enumerateInstanceExtensionProperties = true,
-            .enumerateInstanceLayerProperties = true,
-            .getInstanceProcAddr = true,
-        },
-        .instance_commands = .{
-            .createDevice = true,
-            .destroyInstance = true,
-            .createDebugUtilsMessengerEXT = enable_validation_layers,
-            .destroyDebugUtilsMessengerEXT = enable_validation_layers,
-            .enumeratePhysicalDevices = true,
-            .getPhysicalDeviceQueueFamilyProperties = true,
-        },
-    },
+    .{ .base_commands = .{
+        .createInstance = true,
+        .enumerateInstanceExtensionProperties = true,
+        .enumerateInstanceLayerProperties = true,
+        .getInstanceProcAddr = true,
+    }, .instance_commands = .{
+        .getDeviceProcAddr = true,
+        .createDevice = true,
+        .destroyInstance = true,
+        .createDebugUtilsMessengerEXT = enable_validation_layers,
+        .destroyDebugUtilsMessengerEXT = enable_validation_layers,
+        .enumeratePhysicalDevices = true,
+        .getPhysicalDeviceQueueFamilyProperties = true,
+    }, .device_commands = .{
+        .destroyDevice = true,
+        .getDeviceQueue = true,
+    } },
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
@@ -45,8 +46,11 @@ instance: Instance = undefined,
 window: glfw.Window = undefined,
 vkb: BaseDispatch = undefined,
 vki: *InstanceDispatch = undefined,
+vkd: DeviceDispatch = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
 physical_device: vk.PhysicalDevice = .null_handle,
+device: Device = undefined,
+graphics_queue: vk.Queue = undefined,
 
 allocator: Allocator,
 
@@ -126,6 +130,10 @@ fn initVulkan(self: *HelloTriangleApp) !void {
     self.pickPhysicalDevice() catch |err| {
         log.err("Error picking physical device {}", .{err});
         return error.PickPhysicalDeviceFailed;
+    };
+    self.createLogicalDevice() catch |err| {
+        log.err("Error creating logical device{}", .{err});
+        return error.CreateLogicalDeviceFailed;
     };
 }
 
@@ -281,6 +289,33 @@ fn findQueueFamilies(self: *HelloTriangleApp, device: vk.PhysicalDevice) !QueueF
     return indices;
 }
 
+fn createLogicalDevice(self: *HelloTriangleApp) !void {
+    const indices = try self.findQueueFamilies(self.physical_device);
+    const queue_priority = [_]f32{1};
+    const queue_create_info = [_]vk.DeviceQueueCreateInfo{
+        .{
+            .queue_family_index = indices.graphicsFamily.?,
+            .queue_count = 1,
+            .p_queue_priorities = &queue_priority,
+        },
+    };
+
+    var device_create_info: vk.DeviceCreateInfo = .{
+        .p_queue_create_infos = &queue_create_info,
+        .queue_create_info_count = 1,
+    };
+    if (enable_validation_layers) {
+        device_create_info.enabled_layer_count = validation_layers.len;
+        device_create_info.pp_enabled_layer_names = &validation_layers;
+    }
+    const device = try self.instance.createDevice(self.physical_device, &device_create_info, null);
+    const vkd = try self.allocator.create(DeviceDispatch);
+    errdefer self.allocator.destroy(vkd);
+    vkd.* = try DeviceDispatch.load(device, self.instance.wrapper.dispatch.vkGetDeviceProcAddr);
+    self.device = Device.init(device, vkd);
+    self.graphics_queue = self.device.getDeviceQueue(indices.graphicsFamily.?, 0);
+}
+
 fn mainLoop(self: HelloTriangleApp) !void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
@@ -288,12 +323,14 @@ fn mainLoop(self: HelloTriangleApp) !void {
 }
 
 fn cleanUp(self: *HelloTriangleApp) void {
+    self.device.destroyDevice(null);
     if (enable_validation_layers and self.debug_messenger != .null_handle) self.instance.destroyDebugUtilsMessengerEXT(
         self.debug_messenger,
         null,
     );
     self.instance.destroyInstance(null);
-    self.allocator.destroy(self.vki);
+    self.allocator.destroy(self.device.wrapper);
+    self.allocator.destroy(self.instance.wrapper);
     self.window.destroy();
     glfw.terminate();
 }
