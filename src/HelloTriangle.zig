@@ -16,23 +16,29 @@ const width = 800;
 const height = 600;
 
 const apis: []const vk.ApiInfo = &.{
-    .{ .base_commands = .{
-        .createInstance = true,
-        .enumerateInstanceExtensionProperties = true,
-        .enumerateInstanceLayerProperties = true,
-        .getInstanceProcAddr = true,
-    }, .instance_commands = .{
-        .getDeviceProcAddr = true,
-        .createDevice = true,
-        .destroyInstance = true,
-        .createDebugUtilsMessengerEXT = enable_validation_layers,
-        .destroyDebugUtilsMessengerEXT = enable_validation_layers,
-        .enumeratePhysicalDevices = true,
-        .getPhysicalDeviceQueueFamilyProperties = true,
-    }, .device_commands = .{
-        .destroyDevice = true,
-        .getDeviceQueue = true,
-    } },
+    .{
+        .base_commands = .{
+            .createInstance = true,
+            .enumerateInstanceExtensionProperties = true,
+            .enumerateInstanceLayerProperties = true,
+            .getInstanceProcAddr = true,
+        },
+        .instance_commands = .{
+            .getDeviceProcAddr = true,
+            .createDevice = true,
+            .destroyInstance = true,
+            .createDebugUtilsMessengerEXT = enable_validation_layers,
+            .destroyDebugUtilsMessengerEXT = enable_validation_layers,
+            .enumeratePhysicalDevices = true,
+            .getPhysicalDeviceQueueFamilyProperties = true,
+            .getPhysicalDeviceSurfaceSupportKHR = true,
+            .destroySurfaceKHR = true,
+        },
+        .device_commands = .{
+            .destroyDevice = true,
+            .getDeviceQueue = true,
+        },
+    },
 };
 
 const BaseDispatch = vk.BaseWrapper(apis);
@@ -51,13 +57,16 @@ debug_messenger: vk.DebugUtilsMessengerEXT = .null_handle,
 physical_device: vk.PhysicalDevice = .null_handle,
 device: Device = undefined,
 graphics_queue: vk.Queue = undefined,
+surface: vk.SurfaceKHR = undefined,
+present_queue: vk.Queue = undefined,
 
 allocator: Allocator,
 
 const QueueFamilyIndices = struct {
-    graphicsFamily: ?u32 = null,
+    graphics_family: ?u32 = null,
+    presentation_family: ?u32 = null,
     pub fn isComplete(self: QueueFamilyIndices) bool {
-        return self.graphicsFamily != null;
+        return self.graphics_family != null and self.presentation_family != null;
     }
 };
 
@@ -126,6 +135,10 @@ fn initVulkan(self: *HelloTriangleApp) !void {
     self.setupDebugMessenger() catch |err| {
         log.err("Error setting up debug messenger {}", .{err});
         return error.DebugMessengerCreationFailed;
+    };
+    self.createSurface() catch |err| {
+        log.err("Error creating surface {}", .{err});
+        return error.CreateSurfaceFailed;
     };
     self.pickPhysicalDevice() catch |err| {
         log.err("Error picking physical device {}", .{err});
@@ -252,6 +265,12 @@ fn getRequiredExtensions(allocator: Allocator) !std.ArrayListAligned([*:0]const 
     return extensions;
 }
 
+fn createSurface(self: *HelloTriangleApp) !void {
+    if ((glfw.createWindowSurface(self.instance.handle, self.window, null, &self.surface)) != @intFromEnum(vk.Result.success)) {
+        return error.SurfaceInitFailed;
+    }
+}
+
 fn pickPhysicalDevice(self: *HelloTriangleApp) !void {
     const devices = try self.instance.enumeratePhysicalDevicesAlloc(self.allocator);
     defer self.allocator.free(devices);
@@ -278,8 +297,14 @@ fn findQueueFamilies(self: *HelloTriangleApp, device: vk.PhysicalDevice) !QueueF
     defer self.allocator.free(queue_families);
 
     for (queue_families, 0..) |queue_family, i| {
+        const family: u32 = @intCast(i);
+
         if (queue_family.queue_flags.graphics_bit) {
-            indices.graphicsFamily = @intCast(i);
+            indices.graphics_family = family;
+        }
+        const present_support = try self.instance.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), self.surface) == vk.TRUE;
+        if (present_support) {
+            indices.presentation_family = @intCast(i);
         }
         if (indices.isComplete()) {
             break;
@@ -292,17 +317,24 @@ fn findQueueFamilies(self: *HelloTriangleApp, device: vk.PhysicalDevice) !QueueF
 fn createLogicalDevice(self: *HelloTriangleApp) !void {
     const indices = try self.findQueueFamilies(self.physical_device);
     const queue_priority = [_]f32{1};
-    const queue_create_info = [_]vk.DeviceQueueCreateInfo{
+    var queue_create_info = [_]vk.DeviceQueueCreateInfo{
         .{
-            .queue_family_index = indices.graphicsFamily.?,
+            .queue_family_index = indices.graphics_family.?,
+            .queue_count = 1,
+            .p_queue_priorities = &queue_priority,
+        },
+        .{
+            .queue_family_index = indices.presentation_family.?,
             .queue_count = 1,
             .p_queue_priorities = &queue_priority,
         },
     };
+    // Check if device gotten is same, if so return 1 in the queue if not return 2
+    const queue_count: u32 = if (indices.graphics_family.? == indices.presentation_family.?) 1 else 2;
 
     var device_create_info: vk.DeviceCreateInfo = .{
+        .queue_create_info_count = queue_count,
         .p_queue_create_infos = &queue_create_info,
-        .queue_create_info_count = 1,
     };
     if (enable_validation_layers) {
         device_create_info.enabled_layer_count = validation_layers.len;
@@ -313,7 +345,8 @@ fn createLogicalDevice(self: *HelloTriangleApp) !void {
     errdefer self.allocator.destroy(vkd);
     vkd.* = try DeviceDispatch.load(device, self.instance.wrapper.dispatch.vkGetDeviceProcAddr);
     self.device = Device.init(device, vkd);
-    self.graphics_queue = self.device.getDeviceQueue(indices.graphicsFamily.?, 0);
+    self.graphics_queue = self.device.getDeviceQueue(indices.graphics_family.?, 0);
+    self.present_queue = self.device.getDeviceQueue(indices.presentation_family.?, 0);
 }
 
 fn mainLoop(self: HelloTriangleApp) !void {
@@ -328,6 +361,7 @@ fn cleanUp(self: *HelloTriangleApp) void {
         self.debug_messenger,
         null,
     );
+    self.instance.destroySurfaceKHR(self.surface, null);
     self.instance.destroyInstance(null);
     self.allocator.destroy(self.device.wrapper);
     self.allocator.destroy(self.instance.wrapper);
