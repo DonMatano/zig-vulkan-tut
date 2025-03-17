@@ -30,6 +30,7 @@ const apis: []const vk.ApiInfo = &.{
             .createDebugUtilsMessengerEXT = enable_validation_layers,
             .destroyDebugUtilsMessengerEXT = enable_validation_layers,
             .enumeratePhysicalDevices = true,
+            .enumerateDeviceExtensionProperties = true,
             .getPhysicalDeviceQueueFamilyProperties = true,
             .getPhysicalDeviceSurfaceSupportKHR = true,
             .destroySurfaceKHR = true,
@@ -69,6 +70,8 @@ const QueueFamilyIndices = struct {
         return self.graphics_family != null and self.presentation_family != null;
     }
 };
+
+const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 
 /// Default GLFW error handling callback
 fn errorCallback(error_code: glfw.ErrorCode, description: [:0]const u8) void {
@@ -288,7 +291,24 @@ fn pickPhysicalDevice(self: *HelloTriangleApp) !void {
 
 fn isDeviceSuitable(self: *HelloTriangleApp, device: vk.PhysicalDevice) !bool {
     const indices = try self.findQueueFamilies(device);
-    return indices.isComplete();
+    const extensions_supported = try checkDeviceExtensionSupport(self.instance, device, self.allocator);
+    return indices.isComplete() and extensions_supported;
+}
+
+fn checkDeviceExtensionSupport(instance: Instance, p_device: vk.PhysicalDevice, allocator: Allocator) !bool {
+    const available_extensions = try instance.enumerateDeviceExtensionPropertiesAlloc(p_device, null, allocator);
+    defer allocator.free(available_extensions);
+
+    for (required_device_extensions) |ext| {
+        for (available_extensions) |available_ext| {
+            if (std.mem.eql(u8, std.mem.span(ext), std.mem.sliceTo(&available_ext.extension_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn findQueueFamilies(self: *HelloTriangleApp, device: vk.PhysicalDevice) !QueueFamilyIndices {
