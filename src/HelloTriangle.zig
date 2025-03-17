@@ -355,6 +355,8 @@ fn createLogicalDevice(self: *HelloTriangleApp) !void {
     var device_create_info: vk.DeviceCreateInfo = .{
         .queue_create_info_count = queue_count,
         .p_queue_create_infos = &queue_create_info,
+        .enabled_extension_count = required_device_extensions.len,
+        .pp_enabled_extension_names = &required_device_extensions,
     };
     if (enable_validation_layers) {
         device_create_info.enabled_layer_count = validation_layers.len;
