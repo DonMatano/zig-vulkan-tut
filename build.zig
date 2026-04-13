@@ -1,5 +1,4 @@
 const std = @import("std");
-const vk_gen = @import("vulkan_zig");
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -29,18 +28,6 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
-    const mod = b.addModule("vulkan_tut", .{
-        // The root source file is the "entry point" of this module. Users of
-        // this module will only be able to access public declarations contained
-        // in this file, which means that if you have declarations that you
-        // intend to expose to consumers that were defined in other files part
-        // of this module, you will have to make sure to re-export them from
-        // the root file.
-        .root_source_file = b.path("src/root.zig"),
-        // Later on we'll use this module as the root module of a test executable
-        // which requires us to specify a target.
-        .target = target,
-    });
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -73,25 +60,31 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             // List of modules available for import in source files part of the
             // root module.
-            .imports = &.{
-                // Here "vulkan_tut" is the name you will use in your source code to
-                // import this module (e.g. `@import("vulkan_tut")`). The name is
-                // repeated because you are allowed to rename your imports, which
-                // can be extremely useful in case of collisions (which can happen
-                // importing modules from different packages).
-                .{ .name = "vulkan_tut", .module = mod },
-            },
         }),
     });
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
     const glfw = b.dependency("glfw", .{
         .target = target,
         .optimize = optimize,
+        .wayland = true,
     });
     exe.root_module.linkLibrary(glfw.artifact("glfw"));
     const vulkan = b.dependency("vulkan_zig", .{
         .registry = registry,
     }).module("vulkan-zig");
+    // Get the (lazy) path to vk.xml:
+    // Get generator executable reference
+    const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
+    // Set up a run step to generate the bindings
+    const vk_generate_cmd = b.addRunArtifact(vk_gen);
+    // Pass the registry to the generator
+    vk_generate_cmd.addFileArg(registry);
+    // Create a module from the generator's output...
+    const vulkan_zig = b.addModule("vulkan-zig", .{
+        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    });
+    // ... and pass it as a module to your executable's build command
+    exe.root_module.addImport("vulkan", vulkan_zig);
     exe.root_module.addImport("vulkan", vulkan);
 
     // This declares intent for the executable to be installed into the
@@ -129,12 +122,6 @@ pub fn build(b: *std.Build) void {
     // Creates an executable that will run `test` blocks from the provided module.
     // Here `mod` needs to define a target, which is why earlier we made sure to
     // set the releative field.
-    const mod_tests = b.addTest(.{
-        .root_module = mod,
-    });
-
-    // A run step that will run the test executable.
-    const run_mod_tests = b.addRunArtifact(mod_tests);
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -150,7 +137,6 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
