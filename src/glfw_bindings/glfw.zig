@@ -1,4 +1,6 @@
 const std = @import("std");
+const vk = @import("vulkan");
+
 const glfw = @import("c");
 pub const Window = @import("window.zig");
 
@@ -77,4 +79,18 @@ fn checkWindowHintError() !void {
 
 pub fn pollEvents() void {
     glfw.glfwPollEvents();
+}
+
+pub fn getInstanceProcAddress(instance: usize, proc_name: [*:0]const u8) glfw.GLFWvkproc {
+    return @ptrCast(glfw.glfwGetInstanceProcAddress(@ptrFromInt(instance), proc_name));
+}
+
+pub fn getRequiredInstanceExtensions(extension_names: *std.ArrayList([*:0]const u8), alloc: std.mem.Allocator) !void {
+    var glfw_exts_count: u32 = 0;
+    const glfw_exts = glfw.glfwGetRequiredInstanceExtensions(&glfw_exts_count);
+    if (glfw_exts == null) {
+        logCErr(null);
+        return error.GLFW_Error;
+    }
+    try extension_names.appendSlice(alloc, @ptrCast(glfw_exts[0..glfw_exts_count]));
 }
