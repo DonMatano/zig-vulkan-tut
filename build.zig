@@ -45,6 +45,12 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
+    const translate_glfw_c = b.addTranslateC(.{
+        .root_source_file = b.path("src/glfw_bindings/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate_glfw_c.linkSystemLibrary("glfw", .{});
     const exe = b.addExecutable(.{
         .name = "vulkan_tut",
         .root_module = b.createModule(.{
@@ -58,17 +64,18 @@ pub fn build(b: *std.Build) void {
             // definition if desireable (e.g. firmware for embedded devices).
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{
+                    .name = "c",
+                    .module = translate_glfw_c.createModule(),
+                },
+            },
             // List of modules available for import in source files part of the
             // root module.
         }),
+        .use_llvm = true,
     });
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-    const glfw = b.dependency("glfw", .{
-        .target = target,
-        .optimize = optimize,
-        .wayland = true,
-    });
-    exe.root_module.linkLibrary(glfw.artifact("glfw"));
     const vulkan = b.dependency("vulkan_zig", .{
         .registry = registry,
     }).module("vulkan-zig");
