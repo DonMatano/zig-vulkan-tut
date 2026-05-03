@@ -1,14 +1,20 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
 
 const Alloc = std.mem.Allocator;
+
+const BaseWrapper = vk.BaseWrapper;
 //
 window: glfw.Window = undefined,
-instance: ?vk.Instance = null,
-vkb: vk.BaseWrapper = undefined,
+instance: vk.Instance = undefined,
+vkb: BaseWrapper = undefined,
 
 const App = @This();
+
+const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+const validationLayersEnabled: bool = builtin.mode == .Debug;
 
 fn getGLFWInstanceProc(instance: vk.Instance, proc_name: [*:0]const u8) vk.PfnVoidFunction {
     return glfw.getInstanceProcAddress(@intFromEnum(instance), proc_name);
@@ -30,8 +36,13 @@ fn initWindow(self: *App) !void {
 }
 fn initVulkan(self: *App, alloc: Alloc) !void {
     self.vkb = vk.BaseWrapper.load(getGLFWInstanceProc);
+    if (validationLayersEnabled and !try checkLayerSupport(&self.vkb, alloc)) {
+        return error.MissingLayer;
+    }
     var extension_names: std.ArrayList([*:0]const u8) = .empty;
     defer extension_names.deinit(alloc);
+
+    try extension_names.append(alloc, vk.extensions.khr_portability_enumeration.name);
     const application_info: vk.ApplicationInfo = .{
         .p_application_name = "Hello Triangle",
         .application_version = vk.makeApiVersion(1, 0, 0, 0).toU32(),
@@ -50,6 +61,21 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     const vki = try alloc.create(vk.InstanceWrapper);
     errdefer alloc.destroy(vki);
     vki.* = vk.InstanceWrapper.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr.?);
+}
+
+fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
+    const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);
+    defer alloc.free(available_layers);
+    for (required_layer_names) |required_layer| {
+        for (available_layers) |available_layer| {
+            if (std.mem.eql(u8, std.mem.span(required_layer), std.mem.sliceTo(&available_layer.layer_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
