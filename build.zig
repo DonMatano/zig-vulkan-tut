@@ -51,34 +51,35 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     translate_glfw_c.linkSystemLibrary("glfw", .{});
+    const exe_mod = b.addModule("vulkan_tut", .{
+        // b.createModule defines a new module just like b.addModule but,
+        // unlike b.addModule, it does not expose the module to consumers of
+        // this package, which is why in this case we don't have to give it a name.
+        .root_source_file = b.path("src/main.zig"),
+        // Target and optimization levels must be explicitly wired in when
+        // defining an executable or library (in the root module), and you
+        // can also hardcode a specific target for an executable or library
+        // definition if desireable (e.g. firmware for embedded devices).
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{
+                .name = "c",
+                .module = translate_glfw_c.createModule(),
+            },
+        },
+        // List of modules available for import in source files part of the
+        // root module.
+    });
     const exe = b.addExecutable(.{
         .name = "vulkan_tut",
-        .root_module = b.createModule(.{
-            // b.createModule defines a new module just like b.addModule but,
-            // unlike b.addModule, it does not expose the module to consumers of
-            // this package, which is why in this case we don't have to give it a name.
-            .root_source_file = b.path("src/main.zig"),
-            // Target and optimization levels must be explicitly wired in when
-            // defining an executable or library (in the root module), and you
-            // can also hardcode a specific target for an executable or library
-            // definition if desireable (e.g. firmware for embedded devices).
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{
-                    .name = "c",
-                    .module = translate_glfw_c.createModule(),
-                },
-            },
-            // List of modules available for import in source files part of the
-            // root module.
-        }),
+        .root_module = exe_mod,
         .use_llvm = true,
     });
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-    const vulkan = b.dependency("vulkan_zig", .{
-        .registry = registry,
-    }).module("vulkan-zig");
+    // const vulkan = b.dependency("vulkan_zig", .{
+    //     .registry = registry,
+    // }).module("vulkan-zig");
     // Get the (lazy) path to vk.xml:
     // Get generator executable reference
     const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
@@ -92,13 +93,29 @@ pub fn build(b: *std.Build) void {
     });
     // ... and pass it as a module to your executable's build command
     exe.root_module.addImport("vulkan", vulkan_zig);
-    exe.root_module.addImport("vulkan", vulkan);
+    b.installArtifact(exe);
+    // exe.root_module.addImport("vulkan", vulkan);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
-    b.installArtifact(exe);
+    // This is where the interesting part begins.
+    // As you can see we are re-defining the same executable but
+    // we're binding it to a dedicated build step.
+    const exe_check = b.addExecutable(.{
+        .name = "foo",
+        .root_module = exe_mod,
+    });
+    exe_check.root_module.addImport("vulkan", vulkan_zig);
+    // exe_check.root_module.addImport("vulkan", vulkan);
+    // There is no `b.installArtifact(exe_check);` here.
+
+    // Finally we add the "check" step which will be detected
+    // by ZLS and automatically enable Build-On-Save.
+    // If you copy this into your `build.zig`, make sure to rename 'foo'
+    const check = b.step("check", "Check if build compiles");
+    check.dependOn(&exe_check.step);
 
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
