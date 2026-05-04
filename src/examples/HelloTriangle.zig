@@ -13,11 +13,17 @@ window: glfw.Window = undefined,
 instance: Instance = undefined,
 vkb: BaseWrapper = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = undefined,
+physical_device: vk.PhysicalDevice = undefined,
 
 const App = @This();
 
+const app_log = std.log.scoped(.App);
+
 const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const validationLayersEnabled: bool = builtin.mode == .Debug;
+const QueueFamilyIndices = struct {
+    graphics_family: u32,
+};
 
 fn getGLFWInstanceProc(instance: vk.Instance, proc_name: [*:0]const u8) vk.PfnVoidFunction {
     return glfw.getInstanceProcAddress(@intFromEnum(instance), proc_name);
@@ -39,6 +45,7 @@ fn initWindow(self: *App) !void {
 }
 fn initVulkan(self: *App, alloc: Alloc) !void {
     self.vkb = vk.BaseWrapper.load(getGLFWInstanceProc);
+    try self.listInstanceExtensionSupport(alloc);
     if (validationLayersEnabled and !try checkLayerSupport(&self.vkb, alloc)) {
         return error.MissingLayer;
     }
@@ -72,6 +79,16 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     self.instance = Instance.init(instance, vki);
     errdefer self.instance.destroyInstance(null);
     try self.setupDebugMessenger();
+    // try self.pickPhysicalDevice(alloc);
+}
+
+fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
+    const extensions = try self.vkb.enumerateInstanceExtensionPropertiesAlloc(null, alloc);
+    defer alloc.free(extensions);
+    app_log.debug("Instance Extensions:\n", .{});
+    for (extensions, 0..) |ext, i| {
+        app_log.debug("{d}: {s}\n", .{ i, ext.extension_name });
+    }
 }
 
 fn setupDebugMessenger(self: *App) !void {
@@ -121,6 +138,43 @@ fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
     }
     return true;
 }
+
+fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
+    const physical_devices = try self.instance.enumeratePhysicalDevicesAlloc(alloc);
+    defer alloc.free(physical_devices);
+    if (physical_devices.len == 0) {
+        app_log.err("Failed to find GPUs with Vulkan support", .{});
+        return error.NoPhysicalDevicesFound;
+    }
+
+    for (physical_devices) |physical_device| {
+        if (try isDeviceSuitable(self.instance, physical_device)) {
+            const device_properties = self.instance.getPhysicalDeviceProperties(physical_device);
+            app_log.debug("Got suitable physical device: {s}, type: {s}", .{ device_properties.device_name, @tagName(device_properties.device_type) });
+            self.physical_device = physical_device;
+            break;
+        }
+    }
+}
+
+fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice) bool {
+    const device_props = instance.getPhysicalDeviceProperties(physical_device);
+    const device_features = instance.getPhysicalDeviceFeatures(physical_device);
+
+    const supports_Vulkan_1_3 = device_props.api_version >= vk.API_VERSION_1_3.toU32();
+
+    return supports_Vulkan_1_3;
+}
+
+fn findQueueFamilies(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !QueueFamilyIndices {
+    const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
+    defer alloc.free(families);
+    return .{};
+}
+
+// fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
+//     const device_extension = try instance.enumerateDeviceExtensionPropertiesAlloc(physical_device,null, alloc);
+// }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
