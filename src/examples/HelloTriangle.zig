@@ -8,9 +8,11 @@ const Alloc = std.mem.Allocator;
 const BaseWrapper = vk.BaseWrapper;
 const InstanceWrapper = vk.InstanceWrapper;
 const Instance = vk.InstanceProxy;
+const Device = vk.DeviceProxy;
 //
 window: glfw.Window = undefined,
 instance: Instance = undefined,
+device: Device = undefined,
 vkb: BaseWrapper = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = undefined,
 physical_device: vk.PhysicalDevice = undefined,
@@ -45,6 +47,22 @@ fn initWindow(self: *App) !void {
     self.window = try glfw.Window.init(800, 1280, "Vulkan");
 }
 fn initVulkan(self: *App, alloc: Alloc) !void {
+    try self.createInstance(alloc);
+    try self.setupDebugMessenger();
+    try self.pickPhysicalDevice(alloc);
+    try self.createLogicalDevice();
+}
+
+fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
+    const extensions = try self.vkb.enumerateInstanceExtensionPropertiesAlloc(null, alloc);
+    defer alloc.free(extensions);
+    app_log.debug("Instance Extensions:\n", .{});
+    for (extensions, 0..) |ext, i| {
+        app_log.debug("{d}: {s}\n", .{ i, ext.extension_name });
+    }
+}
+
+fn createInstance(self: *App, alloc: Alloc) !void {
     self.vkb = vk.BaseWrapper.load(getGLFWInstanceProc);
     try self.listInstanceExtensionSupport(alloc);
     if (validationLayersEnabled and !try checkLayerSupport(&self.vkb, alloc)) {
@@ -79,17 +97,6 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     vki.* = InstanceWrapper.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr.?);
     self.instance = Instance.init(instance, vki);
     errdefer self.instance.destroyInstance(null);
-    try self.setupDebugMessenger();
-    // try self.pickPhysicalDevice(alloc);
-}
-
-fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
-    const extensions = try self.vkb.enumerateInstanceExtensionPropertiesAlloc(null, alloc);
-    defer alloc.free(extensions);
-    app_log.debug("Instance Extensions:\n", .{});
-    for (extensions, 0..) |ext, i| {
-        app_log.debug("{d}: {s}\n", .{ i, ext.extension_name });
-    }
 }
 
 fn setupDebugMessenger(self: *App) !void {
@@ -160,26 +167,26 @@ fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
 
 fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
     const device_props = instance.getPhysicalDeviceProperties(physical_device);
-    // const device_features = instance.getPhysicalDeviceFeatures(physical_device);
+    const device_features = instance.getPhysicalDeviceFeatures(physical_device);
     var dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{ .p_next = null };
 
     var vk_13_features = vk.PhysicalDeviceVulkan13Features{
         .p_next = &dynamic_state_features,
     };
 
-    var feature_2 = vk.PhysicalDeviceFeatures2{ .p_next = &vk_13_features };
+    var feature_2 = vk.PhysicalDeviceFeatures2{ .p_next = &vk_13_features, .features = device_features };
     instance.getPhysicalDeviceFeatures2(physical_device, &feature_2);
     const device_families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
     defer alloc.free(device_families);
 
     const supports_Vulkan_1_3 = device_props.api_version >= vk.API_VERSION_1_3.toU32();
     const supports_graphics = for (device_families) |device_family| {
-        if (device_family.queue_flags == .graphics_bit) {
+        if (device_family.queue_flags.graphics_bit) {
             break true;
         }
     } else false;
 
-    const supports_required_features = vk_13_features.dynamic_rendering and dynamic_state_features.extended_dynamic_state;
+    const supports_required_features = (vk_13_features.dynamic_rendering == .true) and (dynamic_state_features.extended_dynamic_state == .true);
 
     return supports_Vulkan_1_3 and supports_graphics and supports_required_features;
 }
@@ -205,6 +212,10 @@ fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice,
         }
     }
     return true;
+}
+
+fn createLogicalDevice(self: *App) !void {
+    _ = self;
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
