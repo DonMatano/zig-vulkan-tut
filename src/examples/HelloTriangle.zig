@@ -20,6 +20,7 @@ const App = @This();
 const app_log = std.log.scoped(.App);
 
 const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
 const validationLayersEnabled: bool = builtin.mode == .Debug;
 const QueueFamilyIndices = struct {
     graphics_family: u32,
@@ -148,7 +149,7 @@ fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
     }
 
     for (physical_devices) |physical_device| {
-        if (try isDeviceSuitable(self.instance, physical_device)) {
+        if (try isDeviceSuitable(self.instance, physical_device, alloc)) {
             const device_properties = self.instance.getPhysicalDeviceProperties(physical_device);
             app_log.debug("Got suitable physical device: {s}, type: {s}", .{ device_properties.device_name, @tagName(device_properties.device_type) });
             self.physical_device = physical_device;
@@ -157,24 +158,54 @@ fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
     }
 }
 
-fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice) bool {
+fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
     const device_props = instance.getPhysicalDeviceProperties(physical_device);
-    const device_features = instance.getPhysicalDeviceFeatures(physical_device);
+    // const device_features = instance.getPhysicalDeviceFeatures(physical_device);
+    var dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{ .p_next = null };
+
+    var vk_13_features = vk.PhysicalDeviceVulkan13Features{
+        .p_next = &dynamic_state_features,
+    };
+
+    var feature_2 = vk.PhysicalDeviceFeatures2{ .p_next = &vk_13_features };
+    instance.getPhysicalDeviceFeatures2(physical_device, &feature_2);
+    const device_families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
+    defer alloc.free(device_families);
 
     const supports_Vulkan_1_3 = device_props.api_version >= vk.API_VERSION_1_3.toU32();
+    const supports_graphics = for (device_families) |device_family| {
+        if (device_family.queue_flags == .graphics_bit) {
+            break true;
+        }
+    } else false;
 
-    return supports_Vulkan_1_3;
+    const supports_required_features = vk_13_features.dynamic_rendering and dynamic_state_features.extended_dynamic_state;
+
+    return supports_Vulkan_1_3 and supports_graphics and supports_required_features;
 }
 
-fn findQueueFamilies(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !QueueFamilyIndices {
-    const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
-    defer alloc.free(families);
-    return .{};
-}
-
-// fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
-//     const device_extension = try instance.enumerateDeviceExtensionPropertiesAlloc(physical_device,null, alloc);
+// fn findQueueFamilies(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !QueueFamilyIndices {
+//     const families = try instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(physical_device, alloc);
+//     defer alloc.free(families);
+//     var graphics_family: ?u32 = null;
+//     return .{};
 // }
+
+fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
+    const device_props = try instance.enumerateDeviceExtensionPropertiesAlloc(physical_device, null, alloc);
+    defer alloc.free(device_props);
+
+    for (required_device_extensions) |required_extension| {
+        for (device_props) |device_prop| {
+            if (std.mem.eql(u8, std.mem.span(required_extension), std.mem.sliceTo(&device_prop.extension_name, 0))) {
+                break;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
