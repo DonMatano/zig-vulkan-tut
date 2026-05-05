@@ -63,6 +63,7 @@ fn initWindow(self: *App) !void {
 fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createInstance(alloc);
     try self.setupDebugMessenger();
+    try self.createSurface(alloc);
     try self.pickPhysicalDevice(alloc);
     try self.createLogicalDevice(alloc);
 }
@@ -143,6 +144,11 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     std.debug.print("{s}: validation layer type {s}\n msg:{s}\n", .{ severity_str, type_str, message });
 
     return .false;
+}
+
+fn createSurface(self: *App, alloc: Alloc) !void {
+    _ = alloc;
+    try self.window.createSurface(@ptrFromInt(@intFromEnum(self.instance.handle)), @ptrCast(&self.surface));
 }
 
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
@@ -290,6 +296,7 @@ fn cleanup(self: *App) void {
     if (validationLayersEnabled) {
         self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     }
+    self.instance.destroySurfaceKHR(self.surface, null);
     self.instance.destroyInstance(null);
     self.window.destroy();
     glfw.terminate();
