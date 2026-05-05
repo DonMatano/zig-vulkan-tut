@@ -73,6 +73,7 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createLogicalDevice(alloc);
     try self.createSwapChain(alloc);
     try self.createImageViews(alloc);
+    try self.createGraphicsPipeline();
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -412,13 +413,15 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     errdefer self.device.destroyDevice(null);
     self.queue = Queue.init(self.device, queue_family_index.?);
 }
+
+fn createGraphicsPipeline(self: *App) !void {}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
     }
 }
 fn cleanup(self: *App) void {
-    for (self.swap_chain_image_views) |image_view| {
+    for (self.swap_chain_image_views.items) |image_view| {
         self.device.destroyImageView(image_view, null);
     }
     self.device.destroySwapchainKHR(self.swap_chain, null);
