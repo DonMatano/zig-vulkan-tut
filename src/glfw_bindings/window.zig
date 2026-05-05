@@ -41,6 +41,16 @@ pub fn createSurface(self: Window, instance: ?*cglfw.struct_VkInstance_T, surfac
     }
 }
 
+pub fn getFrameBufferSize(self: Window) struct { width: u32, height: u32 } {
+    var width: c_int = undefined;
+    var height: c_int = undefined;
+    cglfw.glfwGetFramebufferSize(self.glfw_window, &width, &height);
+    return .{
+        .width = @intCast(width),
+        .height = @intCast(height),
+    };
+}
+
 pub fn destroy(self: *Window) void {
     cglfw.glfwDestroyWindow(self.glfw_window);
 }

@@ -177,6 +177,19 @@ fn chooseSwapPresentMode(availabe_present_modes: []vk.PresentModeKHR) !vk.Presen
     } else vk.PresentModeKHR.fifo_khr;
 }
 
+fn chooseSwapExtent(window: *glfw.Window, capabilites: *vk.SurfaceCapabilitiesKHR) vk.Extent2D {
+    if (capabilites.current_extent.width != std.math.maxInt(u32)) {
+        return capabilites.current_extent;
+    }
+    const dimen = window.getFrameBufferSize();
+    const width = std.math.clamp(dimen.width, capabilites.min_image_extent.width, capabilites.max_image_extent.width);
+    const height = std.math.clamp(dimen.height, capabilites.min_image_extent.height, capabilites.max_image_extent.height);
+    return .{
+        .height = height,
+        .width = width,
+    };
+}
+
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
     std.log.debug("Checking layer support", .{});
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);
