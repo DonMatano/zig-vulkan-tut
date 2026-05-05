@@ -151,12 +151,30 @@ fn createSurface(self: *App, alloc: Alloc) !void {
     try self.window.createSurface(@ptrFromInt(@intFromEnum(self.instance.handle)), @ptrCast(&self.surface));
 }
 
-fn chooseSwapSurfaceFormat(availableFormats: []vk.SurfaceFormatKHR) !vk.SurfaceFormatKHR {
-    const foundFormat = for (availableFormats) |format| {
+fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) !vk.SurfaceFormatKHR {
+    if (available_formats.len == 0) return error.EmptySurfaceFormat;
+    const found_format = for (available_formats) |format| {
         if (format.format == .b8g8r8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
             break format;
         }
-    } else availableFormats[0];
+    } else available_formats[0];
+    return found_format;
+}
+
+fn chooseSwapPresentMode(availabe_present_modes: []vk.PresentModeKHR) !vk.PresentModeKHR {
+    const fifo_mode_exists = for (availabe_present_modes) |mode| {
+        if (mode == .fifo_khr) {
+            break true;
+        }
+    } else false;
+    if (!fifo_mode_exists) {
+        return error.MissingFifoPresentationFormat;
+    }
+    return for (availabe_present_modes) |mode| {
+        if (mode == .mailbox_khr) {
+            break .mailbox_khr;
+        }
+    } else vk.PresentModeKHR.fifo_khr;
 }
 
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
