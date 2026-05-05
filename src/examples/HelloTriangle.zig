@@ -28,7 +28,7 @@ vkb: BaseWrapper = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = undefined,
 physical_device: vk.PhysicalDevice = undefined,
 device_features: vk.PhysicalDeviceFeatures = undefined,
-graphics_queue: Queue = undefined,
+queue: Queue = undefined,
 surface: vk.SurfaceKHR = undefined,
 
 const App = @This();
@@ -238,7 +238,14 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     // _ = self;
     const families = try self.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(self.physical_device, alloc);
     defer alloc.free(families);
-    var graphics_family_index: ?u32 = null;
+    var queue_family_index: ?u32 = null;
+    for (families, 0..) |family, i| {
+        const has_surface_control = try self.instance.getPhysicalDeviceSurfaceSupportKHR(self.physical_device, @intCast(i), self.surface) == .true;
+        if (family.queue_flags.graphics_bit and has_surface_control) {
+            queue_family_index = @intCast(i);
+            break;
+        }
+    }
     var dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{
         .p_next = null,
         .extended_dynamic_state = .true,
@@ -251,21 +258,14 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 
     const feature_2 = vk.PhysicalDeviceFeatures2{ .p_next = &vk_13_features, .features = .{} };
 
-    for (families, 0..) |family, i| {
-        if (family.queue_flags.graphics_bit) {
-            graphics_family_index = @intCast(i);
-            break;
-        }
-    }
-
-    if (graphics_family_index == null) {
-        app_log.err("Failed to get a graphics family", .{});
+    if (queue_family_index == null) {
+        app_log.err("Failed to get a graphics & presentation family", .{});
         return error.MissingGraphicsFamily;
     }
     const queuePriority: f32 = 0.5;
 
     const device_queue_create_info: vk.DeviceQueueCreateInfo = .{
-        .queue_family_index = graphics_family_index.?,
+        .queue_family_index = queue_family_index.?,
         .p_queue_priorities = @ptrCast(&queuePriority),
         .queue_count = 1,
     };
@@ -284,7 +284,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     vkd.* = DeviceWrapper.load(dev, self.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
     self.device = Device.init(dev, vkd);
     errdefer self.device.destroyDevice(null);
-    // self.graphics_queue =
+    self.queue = Queue.init(self.device, queue_family_index.?);
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
