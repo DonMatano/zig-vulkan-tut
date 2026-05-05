@@ -30,6 +30,11 @@ physical_device: vk.PhysicalDevice = undefined,
 device_features: vk.PhysicalDeviceFeatures = undefined,
 queue: Queue = undefined,
 surface: vk.SurfaceKHR = undefined,
+swap_chain: vk.SwapchainKHR = undefined,
+swap_chain_images: std.ArrayList(vk.Image) = undefined,
+swap_chain_image_format: vk.Format = undefined,
+swap_chain_extent: vk.Extent2D = undefined,
+swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
 
 const App = @This();
 
@@ -63,9 +68,11 @@ fn initWindow(self: *App) !void {
 fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createInstance(alloc);
     try self.setupDebugMessenger();
-    try self.createSurface(alloc);
+    try self.createSurface();
     try self.pickPhysicalDevice(alloc);
     try self.createLogicalDevice(alloc);
+    try self.createSwapChain(alloc);
+    try self.createImageViews(alloc);
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -146,15 +153,76 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     return .false;
 }
 
-fn createSurface(self: *App, alloc: Alloc) !void {
-    _ = alloc;
+fn createSurface(self: *App) !void {
     try self.window.createSurface(@ptrFromInt(@intFromEnum(self.instance.handle)), @ptrCast(&self.surface));
+}
+fn createSwapChain(self: *App, alloc: Alloc) !void {
+    const surface_capabilities = try self.instance.getPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface);
+    const swap_chain_extent = chooseSwapExtent(&self.window, surface_capabilities);
+    const min_image_count = chooseSwapMinImageCount(surface_capabilities);
+    const available_formats = try self.instance.getPhysicalDeviceSurfaceFormatsAllocKHR(self.physical_device, self.surface, alloc);
+    const available_present_modes = try self.instance.getPhysicalDeviceSurfacePresentModesAllocKHR(self.physical_device, self.surface, alloc);
+    defer {
+        alloc.free(available_formats);
+        alloc.free(available_present_modes);
+    }
+    const swap_chain_surface_format = try chooseSwapSurfaceFormat(available_formats);
+    const swap_chain_create_info: vk.SwapchainCreateInfoKHR = .{
+        .surface = self.surface,
+        .min_image_count = min_image_count,
+        .image_format = swap_chain_surface_format.format,
+        .image_color_space = swap_chain_surface_format.color_space,
+        .image_extent = swap_chain_extent,
+        .image_array_layers = 1,
+        .image_usage = .{ .color_attachment_bit = true },
+        .image_sharing_mode = .exclusive,
+        .pre_transform = surface_capabilities.current_transform,
+        .composite_alpha = .{ .opaque_bit_khr = true },
+        .present_mode = try chooseSwapPresentMode(available_present_modes),
+        .clipped = .true,
+    };
+    self.swap_chain = self.device.createSwapchainKHR(&swap_chain_create_info, null) catch {
+        app_log.err("SwapChain creationg Failed", .{});
+        return error.SwapChainCreationFailed;
+    };
+    errdefer self.device.destroySwapchainKHR(self.swap_chain, null);
+
+    const images = try self.device.getSwapchainImagesAllocKHR(self.swap_chain, alloc);
+    defer alloc.free(images);
+
+    self.swap_chain_images = .initBuffer(images);
+}
+
+fn createImageViews(self: *App, alloc: Alloc) !void {
+    if (self.swap_chain_image_views.items.len != 0) {
+        app_log.err("Expected no image_views but got {d}", .{self.swap_chain_image_views.items.len});
+        return error.ImageViewsListIsNotEmpty;
+    }
+    var image_view_info: vk.ImageViewCreateInfo = .{
+        .view_type = .@"2d",
+        .image = undefined,
+        .format = self.swap_chain_image_format,
+        .subresource_range = .{ .aspect_mask = .{ .color_bit = true }, .level_count = 1, .layer_count = 1, .base_mip_level = 0, .base_array_layer = 0 },
+        .components = .{ .a = .identity, .b = .identity, .g = .identity, .r = .identity },
+    };
+
+    for (self.swap_chain_images.items) |swap_chain_image| {
+        image_view_info.image = swap_chain_image;
+        const image_view = try self.device.createImageView(&image_view_info, null);
+        try self.swap_chain_image_views.append(alloc, image_view);
+    }
+    errdefer {
+        for (self.swap_chain_image_views) |image_view| {
+            self.device.destroyImageView(image_view, null);
+        }
+    }
 }
 
 fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) !vk.SurfaceFormatKHR {
     if (available_formats.len == 0) return error.EmptySurfaceFormat;
     const found_format = for (available_formats) |format| {
         if (format.format == .b8g8r8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
+            app_log.debug("Found srg and non linear format", .{});
             break format;
         }
     } else available_formats[0];
@@ -172,22 +240,33 @@ fn chooseSwapPresentMode(availabe_present_modes: []vk.PresentModeKHR) !vk.Presen
     }
     return for (availabe_present_modes) |mode| {
         if (mode == .mailbox_khr) {
+            app_log.debug("Found mailbox presentation mode", .{});
             break .mailbox_khr;
         }
     } else vk.PresentModeKHR.fifo_khr;
 }
 
-fn chooseSwapExtent(window: *glfw.Window, capabilites: *vk.SurfaceCapabilitiesKHR) vk.Extent2D {
+fn chooseSwapExtent(window: *glfw.Window, capabilites: vk.SurfaceCapabilitiesKHR) vk.Extent2D {
     if (capabilites.current_extent.width != std.math.maxInt(u32)) {
         return capabilites.current_extent;
     }
     const dimen = window.getFrameBufferSize();
     const width = std.math.clamp(dimen.width, capabilites.min_image_extent.width, capabilites.max_image_extent.width);
     const height = std.math.clamp(dimen.height, capabilites.min_image_extent.height, capabilites.max_image_extent.height);
+    app_log.debug("swap extent width: {d}, height: {d}", .{ width, height });
     return .{
         .height = height,
         .width = width,
     };
+}
+
+fn chooseSwapMinImageCount(capabilities: vk.SurfaceCapabilitiesKHR) u32 {
+    var min_image_count: u32 = @max(3, capabilities.min_image_count);
+    if ((0 < capabilities.max_image_count) and (capabilities.max_image_count < min_image_count)) {
+        min_image_count = capabilities.max_image_count;
+    }
+    app_log.debug("swap min image count: {d}", .{min_image_count});
+    return min_image_count;
 }
 
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
@@ -339,6 +418,10 @@ fn mainLoop(self: *App) void {
     }
 }
 fn cleanup(self: *App) void {
+    for (self.swap_chain_image_views) |image_view| {
+        self.device.destroyImageView(image_view, null);
+    }
+    self.device.destroySwapchainKHR(self.swap_chain, null);
     self.device.destroyDevice(null);
     if (validationLayersEnabled) {
         self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
