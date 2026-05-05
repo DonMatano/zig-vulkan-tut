@@ -151,6 +151,14 @@ fn createSurface(self: *App, alloc: Alloc) !void {
     try self.window.createSurface(@ptrFromInt(@intFromEnum(self.instance.handle)), @ptrCast(&self.surface));
 }
 
+fn chooseSwapSurfaceFormat(availableFormats: []vk.SurfaceFormatKHR) !vk.SurfaceFormatKHR {
+    const foundFormat = for (availableFormats) |format| {
+        if (format.format == .b8g8r8a8_srgb and format.color_space == .srgb_nonlinear_khr) {
+            break format;
+        }
+    } else availableFormats[0];
+}
+
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
     std.log.debug("Checking layer support", .{});
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);
@@ -189,6 +197,7 @@ fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice, allo
     const device_props = instance.getPhysicalDeviceProperties(physical_device);
     const device_features = instance.getPhysicalDeviceFeatures(physical_device);
     var dynamic_state_features = vk.PhysicalDeviceExtendedDynamicStateFeaturesEXT{ .p_next = null };
+    const is_device_ext_supported = try checkExtensionSupport(instance, physical_device, alloc);
 
     var vk_13_features = vk.PhysicalDeviceVulkan13Features{
         .p_next = &dynamic_state_features,
@@ -208,7 +217,7 @@ fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice, allo
 
     const supports_required_features = (vk_13_features.dynamic_rendering == .true) and (dynamic_state_features.extended_dynamic_state == .true);
 
-    return supports_Vulkan_1_3 and supports_graphics and supports_required_features;
+    return is_device_ext_supported and supports_Vulkan_1_3 and supports_graphics and supports_required_features;
 }
 
 // fn findQueueFamilies(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !QueueFamilyIndices {
@@ -221,6 +230,13 @@ fn isDeviceSuitable(instance: Instance, physical_device: vk.PhysicalDevice, allo
 fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice, alloc: Alloc) !bool {
     const device_props = try instance.enumerateDeviceExtensionPropertiesAlloc(physical_device, null, alloc);
     defer alloc.free(device_props);
+
+    if (builtin.mode == .Debug) {
+        app_log.debug("Available device extensions: ", .{});
+        for (device_props, 0..) |ext, i| {
+            app_log.debug("{d}: {s}", .{ i, ext.extension_name });
+        }
+    }
 
     for (required_device_extensions) |required_extension| {
         for (device_props) |device_prop| {
