@@ -6,9 +6,20 @@ const vk = @import("vulkan");
 const Alloc = std.mem.Allocator;
 
 const BaseWrapper = vk.BaseWrapper;
+const DeviceWrapper = vk.DeviceWrapper;
 const InstanceWrapper = vk.InstanceWrapper;
 const Instance = vk.InstanceProxy;
 const Device = vk.DeviceProxy;
+const Queue = struct {
+    handle: vk.Queue,
+    family: u32,
+    fn init(device: Device, family: u32) Queue {
+        return .{
+            .family = family,
+            .handle = device.getDeviceQueue(family, 0),
+        };
+    }
+};
 //
 window: glfw.Window = undefined,
 instance: Instance = undefined,
@@ -17,6 +28,8 @@ vkb: BaseWrapper = undefined,
 debug_messenger: vk.DebugUtilsMessengerEXT = undefined,
 physical_device: vk.PhysicalDevice = undefined,
 device_features: vk.PhysicalDeviceFeatures = undefined,
+graphics_queue: Queue = undefined,
+surface: vk.SurfaceKHR = undefined,
 
 const App = @This();
 
@@ -234,7 +247,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 
     for (families, 0..) |family, i| {
         if (family.queue_flags.graphics_bit) {
-            graphics_family_index = i;
+            graphics_family_index = @intCast(i);
             break;
         }
     }
@@ -247,17 +260,25 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 
     const device_queue_create_info: vk.DeviceQueueCreateInfo = .{
         .queue_family_index = graphics_family_index.?,
-        .p_queue_priorities = &queuePriority,
+        .p_queue_priorities = @ptrCast(&queuePriority),
         .queue_count = 1,
     };
 
     const device_create_info: vk.DeviceCreateInfo = .{
         .p_next = &feature_2,
         .queue_create_info_count = 1,
-        .p_queue_create_infos = &device_queue_create_info,
+        .p_queue_create_infos = @ptrCast(&device_queue_create_info),
         .enabled_extension_count = required_device_extensions.len,
-        .pp_enabled_extension_names = @ptrCast(required_device_extensions),
+        .pp_enabled_extension_names = @ptrCast(&required_device_extensions),
     };
+
+    const dev = try self.instance.createDevice(self.physical_device, &device_create_info, null);
+    const vkd = try alloc.create(DeviceWrapper);
+    errdefer alloc.destroy(vkd);
+    vkd.* = DeviceWrapper.load(dev, self.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
+    self.device = Device.init(dev, vkd);
+    errdefer self.device.destroyDevice(null);
+    // self.graphics_queue =
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
@@ -265,6 +286,7 @@ fn mainLoop(self: *App) void {
     }
 }
 fn cleanup(self: *App) void {
+    self.device.destroyDevice(null);
     if (validationLayersEnabled) {
         self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);
     }
