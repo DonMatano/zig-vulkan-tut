@@ -93,7 +93,32 @@ pub fn build(b: *std.Build) void {
     });
     // ... and pass it as a module to your executable's build command
     exe.root_module.addImport("vulkan", vulkan_zig);
+
+    // shaders
+    const slang_cmd = b.addSystemCommand(&.{
+        "slangc",
+    });
+    slang_cmd.addFileArg(b.path("src/shaders/shader.slang"));
+    slang_cmd.addArgs(&.{
+        "-target",
+        "spirv",
+        "-profile",
+        "spirv_1_4",
+        "-emit-spirv-directly",
+        "-fvk-use-entrypoint-name",
+        "-entry",
+        "vertMain",
+        "-entry",
+        "fragMain",
+        "-o",
+    });
+    const o = slang_cmd.addOutputFileArg("src/shaders/shader.spv");
+    exe.root_module.addAnonymousImport("shader", .{
+        .root_source_file = o,
+    });
+
     b.installArtifact(exe);
+    // slang_cmd.addArg("")
     // exe.root_module.addImport("vulkan", vulkan);
 
     // This declares intent for the executable to be installed into the
@@ -108,6 +133,9 @@ pub fn build(b: *std.Build) void {
         .root_module = exe_mod,
     });
     exe_check.root_module.addImport("vulkan", vulkan_zig);
+    exe_check.root_module.addAnonymousImport("shader", .{
+        .root_source_file = o,
+    });
     // exe_check.root_module.addImport("vulkan", vulkan);
     // There is no `b.installArtifact(exe_check);` here.
 
@@ -132,6 +160,7 @@ pub fn build(b: *std.Build) void {
     // the user runs `zig build run`, so we create a dependency link.
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
+    run_step.dependOn(&slang_cmd.step);
 
     // By making the run step depend on the default step, it will be run from the
     // installation directory rather than directly from within the cache directory.

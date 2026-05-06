@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
+const shader = @embedFile("shader");
 
 const Alloc = std.mem.Allocator;
 
@@ -116,6 +117,7 @@ fn createInstance(self: *App, alloc: Alloc) !void {
     };
     const instance = try self.vkb.createInstance(&create_info, null);
     const vki = try alloc.create(InstanceWrapper);
+    // defer alloc.destroy(&vki);
     errdefer alloc.destroy(vki);
     vki.* = InstanceWrapper.load(instance, self.vkb.dispatch.vkGetInstanceProcAddr.?);
     self.instance = Instance.init(instance, vki);
@@ -195,6 +197,7 @@ fn createSwapChain(self: *App, alloc: Alloc) !void {
 }
 
 fn createImageViews(self: *App, alloc: Alloc) !void {
+    self.swap_chain_image_views = .empty;
     if (self.swap_chain_image_views.items.len != 0) {
         app_log.err("Expected no image_views but got {d}", .{self.swap_chain_image_views.items.len});
         return error.ImageViewsListIsNotEmpty;
@@ -414,7 +417,12 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     self.queue = Queue.init(self.device, queue_family_index.?);
 }
 
-fn createGraphicsPipeline(self: *App) !void {}
+fn createGraphicsPipeline(self: *App) !void {
+    _ = self;
+    const shaderCode align(@alignOf(u32)) = shader.*;
+    app_log.debug("Shade len {d}", .{shaderCode.len});
+    app_log.debug("Shader code  \n\n{s}", .{shaderCode});
+}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();

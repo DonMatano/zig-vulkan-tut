@@ -11,7 +11,7 @@ static float3 colors[3] = float3[](
 	float3(0.0, 0.0, 1.0),
 );
 struct VertexOutput {
-	float4 sv_position = SV_Position;
+	float4 sv_position: SV_Position;
 	float3 color;
 };
 
