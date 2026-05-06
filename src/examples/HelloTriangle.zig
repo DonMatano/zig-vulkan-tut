@@ -420,7 +420,20 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 fn createGraphicsPipeline(self: *App) !void {
     const shader_code align(@alignOf(u32)) = shader.*;
     const shader_module = createShaderModule(self.device, @ptrCast(&shader_code));
-    _ = shader_module;
+    defer self.device.destroyShaderModule(shader_module, null);
+    const vert_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
+        .stage = .{ .vertex_bit = true },
+        .module = shader_module,
+        .p_name = "vertMain",
+    };
+    const frag_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
+        .stage = .{ .fragment_bit = true },
+        .module = shader_module,
+        .p_name = "fragMain",
+    };
+
+    const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
+    _ = shader_stages;
 }
 
 fn createShaderModule(device: Device, code: *[*]const u32) vk.ShaderModule {
