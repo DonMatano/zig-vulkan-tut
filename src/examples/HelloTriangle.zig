@@ -418,10 +418,17 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 }
 
 fn createGraphicsPipeline(self: *App) !void {
-    _ = self;
-    const shaderCode align(@alignOf(u32)) = shader.*;
-    app_log.debug("Shade len {d}", .{shaderCode.len});
-    app_log.debug("Shader code  \n\n{s}", .{shaderCode});
+    const shader_code align(@alignOf(u32)) = shader.*;
+    const shader_module = createShaderModule(self.device, @ptrCast(&shader_code));
+    _ = shader_module;
+}
+
+fn createShaderModule(device: Device, code: *[*]const u32) vk.ShaderModule {
+    const create_info: vk.ShaderModuleCreateInfo = .{
+        .code_size = code.len,
+        .p_code = code,
+    };
+    return try device.createShaderModule(&create_info, null);
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
