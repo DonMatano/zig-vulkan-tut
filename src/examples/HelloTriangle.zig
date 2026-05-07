@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
-const shader = @embedFile("shader");
+const shader = @embedFile("../shaders/slang.spv");
 
 const Alloc = std.mem.Allocator;
 
@@ -274,11 +274,12 @@ fn chooseSwapMinImageCount(capabilities: vk.SurfaceCapabilitiesKHR) u32 {
 }
 
 fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
-    std.log.debug("Checking layer support", .{});
+    app_log.debug("Checking layer support", .{});
     const available_layers = try vkb.enumerateInstanceLayerPropertiesAlloc(alloc);
     defer alloc.free(available_layers);
     for (required_layer_names) |required_layer| {
         for (available_layers) |available_layer| {
+            app_log.debug("Checking required layer {s}, with layer {s}", .{ required_layer, available_layer.layer_name });
             if (std.mem.eql(u8, std.mem.span(required_layer), std.mem.sliceTo(&available_layer.layer_name, 0))) {
                 break;
             }
@@ -418,8 +419,9 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 }
 
 fn createGraphicsPipeline(self: *App) !void {
-    const shader_code align(@alignOf(u32)) = shader.*;
-    const shader_module = createShaderModule(self.device, @ptrCast(&shader_code));
+    var shader_code align(@alignOf(u32)) = shader.*;
+    app_log.debug("align {}", .{@alignOf(@TypeOf(shader_code))});
+    const shader_module = try createShaderModule(self.device, @ptrCast(@alignCast(&shader_code)), shader_code.len);
     defer self.device.destroyShaderModule(shader_module, null);
     const vert_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
         .stage = .{ .vertex_bit = true },
@@ -434,12 +436,14 @@ fn createGraphicsPipeline(self: *App) !void {
 
     const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
     _ = shader_stages;
+    const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
 }
 
-fn createShaderModule(device: Device, code: *[*]const u32) vk.ShaderModule {
+fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
+    app_log.debug("align {}", .{@alignOf(@TypeOf(code))});
     const create_info: vk.ShaderModuleCreateInfo = .{
-        .code_size = code.len,
-        .p_code = code,
+        .code_size = code_size,
+        .p_code = @ptrCast(code),
     };
     return try device.createShaderModule(&create_info, null);
 }
