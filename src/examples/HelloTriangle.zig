@@ -438,6 +438,8 @@ fn createGraphicsPipeline(self: *App) !void {
     _ = shader_stages;
     const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
     _ = vertex_input_info;
+    const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list };
+    _ = input_assembly;
 }
 
 fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
