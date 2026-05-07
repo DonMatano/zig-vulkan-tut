@@ -491,9 +491,26 @@ fn createGraphicsPipeline(self: *App) !void {
         .attachment_count = 1,
         .p_attachments = &color_blend_attachment,
     };
+    const pipeline_rendering_create_info = vk.PipelineRenderingCreateInfo{
+        .color_attachment_count = 1,
+        .p_color_attachment_formats = &self.swap_chain_image_format,
+    };
 
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
     self.pipeline_layout = try self.device.createPipelineLayout(&pipeline_layout_info, null);
+    const graphics_pipeline_create_info = vk.GraphicsPipelineCreateInfo{
+        .stage_count = 2,
+        .p_stages = shader_stages,
+        .p_vertex_input_state = &vertex_input_info,
+        .p_input_assembly_state = &input_assembly,
+        .p_viewport_state = &viewport_state,
+        .p_rasterization_state = &rasterizer,
+        .p_multisample_state = &multisampling,
+        .p_color_blend_state = &color_blending,
+        .p_dynamic_state = &dynamic_state,
+        .layout = pipeline_layout_info,
+        .p_next = &pipeline_rendering_create_info,
+    };
 }
 
 fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
