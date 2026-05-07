@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
-const shader = @embedFile("../shaders/slang.spv");
+const shader = @embedFile("shader");
 
 const Alloc = std.mem.Allocator;
 
@@ -437,6 +437,7 @@ fn createGraphicsPipeline(self: *App) !void {
     const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
     _ = shader_stages;
     const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
+    _ = vertex_input_info;
 }
 
 fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
