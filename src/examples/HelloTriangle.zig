@@ -37,6 +37,7 @@ swap_chain_image_format: vk.Format = undefined,
 swap_chain_extent: vk.Extent2D = undefined,
 swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
 pipeline_layout: vk.PipelineLayout = undefined,
+graphics_pipeline: vk.Pipeline = undefined,
 
 const App = @This();
 
@@ -293,6 +294,11 @@ fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
 
 fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
     const physical_devices = try self.instance.enumeratePhysicalDevicesAlloc(alloc);
+    app_log.debug("Physical devices found :", .{});
+    for (physical_devices, 0..) |ph_dev, i| {
+        const device_properties = self.instance.getPhysicalDeviceProperties(ph_dev);
+        app_log.debug("{d}: {s}, type: {s}", .{ i, device_properties.device_name, @tagName(device_properties.device_type) });
+    }
     defer alloc.free(physical_devices);
     if (physical_devices.len == 0) {
         app_log.err("Failed to find GPUs with Vulkan support", .{});
@@ -436,24 +442,21 @@ fn createGraphicsPipeline(self: *App) !void {
     };
 
     const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
-    _ = shader_stages;
     const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
-    _ = vertex_input_info;
-    const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list };
-    _ = input_assembly;
+    const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list, .primitive_restart_enable = .false };
 
-    const viewport: vk.Viewport = .{
-        .x = 0,
-        .y = 0,
-        .width = @intCast(self.swap_chain_extent.width),
-        .height = @intCast(self.swap_chain_extent.height),
-        .min_depth = 0,
-        .max_depth = 1,
-    };
-    const scissor: vk.Rect2D = .{
-        .offset = vk.Offset2D{ .x = 0, .y = 0 },
-        .extent = self.swap_chain_extent,
-    };
+    // const viewport: vk.Viewport = .{
+    //     .x = 0,
+    //     .y = 0,
+    //     .width = @intCast(self.swap_chain_extent.width),
+    //     .height = @intCast(self.swap_chain_extent.height),
+    //     .min_depth = 0,
+    //     .max_depth = 1,
+    // };
+    // const scissor: vk.Rect2D = .{
+    //     .offset = vk.Offset2D{ .x = 0, .y = 0 },
+    //     .extent = self.swap_chain_extent,
+    // };
 
     const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
 
@@ -469,6 +472,9 @@ fn createGraphicsPipeline(self: *App) !void {
 
     const rasterizer = vk.PipelineRasterizationStateCreateInfo{
         .depth_clamp_enable = .false,
+        .depth_bias_clamp = 0,
+        .depth_bias_constant_factor = 0,
+        .depth_bias_slope_factor = 0,
         .rasterizer_discard_enable = .false,
         .polygon_mode = .fill,
         .cull_mode = .{ .back_bit = true },
@@ -480,27 +486,40 @@ fn createGraphicsPipeline(self: *App) !void {
     const multisampling = vk.PipelineMultisampleStateCreateInfo{
         .rasterization_samples = .{ .@"1_bit" = true },
         .sample_shading_enable = .false,
+        .min_sample_shading = 1,
+        .alpha_to_coverage_enable = .false,
+        .alpha_to_one_enable = .false,
     };
     const color_blend_attachment = vk.PipelineColorBlendAttachmentState{
         .blend_enable = .false,
         .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+        .src_color_blend_factor = .one,
+        .dst_color_blend_factor = .zero,
+        .color_blend_op = .add,
+        .src_alpha_blend_factor = .one,
+        .dst_alpha_blend_factor = .zero,
+        .alpha_blend_op = .add,
     };
     const color_blending = vk.PipelineColorBlendStateCreateInfo{
         .logic_op_enable = .false,
         .logic_op = .copy,
         .attachment_count = 1,
-        .p_attachments = &color_blend_attachment,
+        .p_attachments = &.{color_blend_attachment},
+        .blend_constants = .{ 0, 0, 0, 0 },
     };
     const pipeline_rendering_create_info = vk.PipelineRenderingCreateInfo{
         .color_attachment_count = 1,
-        .p_color_attachment_formats = &self.swap_chain_image_format,
+        .p_color_attachment_formats = &.{self.swap_chain_image_format},
+        .view_mask = 0,
+        .depth_attachment_format = self.swap_chain_image_format,
+        .stencil_attachment_format = self.swap_chain_image_format,
     };
 
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
     self.pipeline_layout = try self.device.createPipelineLayout(&pipeline_layout_info, null);
     const graphics_pipeline_create_info = vk.GraphicsPipelineCreateInfo{
         .stage_count = 2,
-        .p_stages = shader_stages,
+        .p_stages = @ptrCast(&shader_stages),
         .p_vertex_input_state = &vertex_input_info,
         .p_input_assembly_state = &input_assembly,
         .p_viewport_state = &viewport_state,
@@ -508,9 +527,14 @@ fn createGraphicsPipeline(self: *App) !void {
         .p_multisample_state = &multisampling,
         .p_color_blend_state = &color_blending,
         .p_dynamic_state = &dynamic_state,
-        .layout = pipeline_layout_info,
+        .layout = self.pipeline_layout,
         .p_next = &pipeline_rendering_create_info,
+        .subpass = 0,
+        .base_pipeline_index = -1,
+        .base_pipeline_handle = .null_handle,
     };
+
+    _ = try self.device.createGraphicsPipelines(.null_handle, &.{graphics_pipeline_create_info}, null, (&self.graphics_pipeline)[0..1]);
 }
 
 fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
@@ -527,6 +551,7 @@ fn mainLoop(self: *App) void {
     }
 }
 fn cleanup(self: *App) void {
+    self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
     for (self.swap_chain_image_views.items) |image_view| {
         self.device.destroyImageView(image_view, null);
