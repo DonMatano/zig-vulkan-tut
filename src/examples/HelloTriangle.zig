@@ -36,6 +36,7 @@ swap_chain_images: std.ArrayList(vk.Image) = undefined,
 swap_chain_image_format: vk.Format = undefined,
 swap_chain_extent: vk.Extent2D = undefined,
 swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
+pipeline_layout: vk.PipelineLayout = undefined,
 
 const App = @This();
 
@@ -440,6 +441,59 @@ fn createGraphicsPipeline(self: *App) !void {
     _ = vertex_input_info;
     const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list };
     _ = input_assembly;
+
+    const viewport: vk.Viewport = .{
+        .x = 0,
+        .y = 0,
+        .width = @intCast(self.swap_chain_extent.width),
+        .height = @intCast(self.swap_chain_extent.height),
+        .min_depth = 0,
+        .max_depth = 1,
+    };
+    const scissor: vk.Rect2D = .{
+        .offset = vk.Offset2D{ .x = 0, .y = 0 },
+        .extent = self.swap_chain_extent,
+    };
+
+    const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
+
+    const dynamic_state = vk.PipelineDynamicStateCreateInfo{
+        .dynamic_state_count = dynamic_states.len,
+        .p_dynamic_states = @ptrCast(&dynamic_states),
+    };
+
+    const viewport_state = vk.PipelineViewportStateCreateInfo{
+        .scissor_count = 1,
+        .viewport_count = 1,
+    };
+
+    const rasterizer = vk.PipelineRasterizationStateCreateInfo{
+        .depth_clamp_enable = .false,
+        .rasterizer_discard_enable = .false,
+        .polygon_mode = .fill,
+        .cull_mode = .{ .back_bit = true },
+        .front_face = .clockwise,
+        .depth_bias_enable = .false,
+        .line_width = 1,
+    };
+
+    const multisampling = vk.PipelineMultisampleStateCreateInfo{
+        .rasterization_samples = .{ .@"1_bit" = true },
+        .sample_shading_enable = .false,
+    };
+    const color_blend_attachment = vk.PipelineColorBlendAttachmentState{
+        .blend_enable = .false,
+        .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+    };
+    const color_blending = vk.PipelineColorBlendStateCreateInfo{
+        .logic_op_enable = .false,
+        .logic_op = .copy,
+        .attachment_count = 1,
+        .p_attachments = &color_blend_attachment,
+    };
+
+    const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
+    self.pipeline_layout = try self.device.createPipelineLayout(&pipeline_layout_info, null);
 }
 
 fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
@@ -456,6 +510,7 @@ fn mainLoop(self: *App) void {
     }
 }
 fn cleanup(self: *App) void {
+    self.device.destroyPipelineLayout(self.pipeline_layout, null);
     for (self.swap_chain_image_views.items) |image_view| {
         self.device.destroyImageView(image_view, null);
     }
