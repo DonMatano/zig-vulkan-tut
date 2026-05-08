@@ -79,6 +79,8 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createSwapChain(alloc);
     try self.createImageViews(alloc);
     try self.createGraphicsPipeline();
+    try self.createCommandPool();
+    try self.createCommandBuffer();
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -555,6 +557,19 @@ fn createCommandPool(self: *App) !void {
         .queue_family_index = self.queue_index,
     };
     self.command_pool = try self.device.createCommandPool(&pool_info, null);
+}
+
+fn createCommandBuffer(self: *App, alloc: Alloc) !void {
+    const alloc_info = vk.CommandBufferAllocateInfo{
+        .command_pool = self.command_pool,
+        .command_buffer_count = 1,
+        .level = .primary,
+    };
+
+    const command_buffers = try alloc.alloc(vk.CommandBuffer, 1);
+    errdefer alloc.free(command_buffers);
+    self.device.allocateCommandBuffers(&alloc_info, command_buffers.ptr);
+    errdefer self.device.freeCommandBuffers(self.command_pool, command_buffers);
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
