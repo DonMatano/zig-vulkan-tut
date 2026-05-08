@@ -30,6 +30,7 @@ debug_messenger: vk.DebugUtilsMessengerEXT = undefined,
 physical_device: vk.PhysicalDevice = undefined,
 device_features: vk.PhysicalDeviceFeatures = undefined,
 queue: Queue = undefined,
+queue_index: u32 = undefined,
 surface: vk.SurfaceKHR = undefined,
 swap_chain: vk.SwapchainKHR = undefined,
 swap_chain_images: std.ArrayList(vk.Image) = undefined,
@@ -38,6 +39,7 @@ swap_chain_extent: vk.Extent2D = undefined,
 swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
 pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
+command_pool: vk.CommandPool = undefined,
 
 const App = @This();
 
@@ -423,6 +425,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     self.device = Device.init(dev, vkd);
     errdefer self.device.destroyDevice(null);
     self.queue = Queue.init(self.device, queue_family_index.?);
+    self.queue_index = queue_family_index.?;
 }
 
 fn createGraphicsPipeline(self: *App) !void {
@@ -545,12 +548,21 @@ fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.
     };
     return try device.createShaderModule(&create_info, null);
 }
+
+fn createCommandPool(self: *App) !void {
+    const pool_info = vk.CommandPoolCreateInfo{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = self.queue_index,
+    };
+    self.command_pool = try self.device.createCommandPool(&pool_info, null);
+}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
     }
 }
 fn cleanup(self: *App) void {
+    self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
     for (self.swap_chain_image_views.items) |image_view| {
