@@ -608,6 +608,9 @@ fn recordCommandBuffer(self: App, image_index: u32) !void {
 
     const rendering_info = vk.RenderingInfo{
         .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_chain_extent },
+        .layer_count = 1,
+        .color_attachment_count = 1,
+        .p_color_attachments = &.{attachment_info},
     };
     self.device.cmdBeginRendering(self.command_buffer, rendering_info);
     self.device.cmdBindPipeline(self.command_buffer, .graphics, self.graphics_pipeline);
@@ -663,9 +666,11 @@ fn transitionImageLayout(self: *App, params: Transition_Image_Layout_Params) voi
     };
     self.device.cmdPipelineBarrier2(self.command_buffer, &dependency_info);
 }
+fn drawFrame() void {}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
+        drawFrame();
     }
 }
 fn cleanup(self: *App) void {
