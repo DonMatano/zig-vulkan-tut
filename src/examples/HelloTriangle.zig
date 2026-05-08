@@ -40,6 +40,7 @@ swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
 pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
+command_buffer: vk.CommandBuffer = undefined,
 
 const App = @This();
 
@@ -79,8 +80,8 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createSwapChain(alloc);
     try self.createImageViews(alloc);
     try self.createGraphicsPipeline();
-    try self.createCommandPool();
-    try self.createCommandBuffer();
+    try self.createCommandPool(alloc);
+    try self.createCommandBuffer(alloc);
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -559,17 +560,108 @@ fn createCommandPool(self: *App) !void {
     self.command_pool = try self.device.createCommandPool(&pool_info, null);
 }
 
-fn createCommandBuffer(self: *App, alloc: Alloc) !void {
+fn createCommandBuffer(self: *App) !void {
     const alloc_info = vk.CommandBufferAllocateInfo{
         .command_pool = self.command_pool,
         .command_buffer_count = 1,
         .level = .primary,
     };
 
-    const command_buffers = try alloc.alloc(vk.CommandBuffer, 1);
-    errdefer alloc.free(command_buffers);
-    self.device.allocateCommandBuffers(&alloc_info, command_buffers.ptr);
+    const command_buffers = [_]vk.CommandBuffer{
+        self.command_buffer,
+    };
+    self.device.allocateCommandBuffers(&alloc_info, &command_buffers);
     errdefer self.device.freeCommandBuffers(self.command_pool, command_buffers);
+}
+
+const Transition_Image_Layout_Params = struct {
+    image_index: u32,
+    old_layout: vk.ImageLayout,
+    new_layout: vk.ImageLayout,
+    src_access_mask: vk.AccessFlags2,
+    dest_access_mask: vk.AccessFlags2,
+    src_stage_mask: vk.PipelineStageFlags2,
+    dest_stage_mask: vk.PipelineStageFlags2,
+};
+fn recordCommandBuffer(self: App, image_index: u32) !void {
+    try self.device.beginCommandBuffer(self.command_buffer, &.{});
+    var transition_image_layout_params = Transition_Image_Layout_Params{
+        .image_index = image_index,
+        .old_layout = .undefined,
+        .new_layout = .color_attachment_optimal,
+        .src_access_mask = .{},
+        .dest_access_mask = .{ .color_attachment_write_bit = true },
+        .src_stage_mask = .{ .color_attachment_output_bit = true },
+        .dest_stage_mask = .{ .color_attachment_output_bit = true },
+    };
+    self.transitionImageLayout(transition_image_layout_params);
+    const clear_color = vk.ClearValue{
+        .color = .{ .float_32 = .{ 0, 0, 0, 1 } },
+    };
+    const attachment_info = vk.RenderingAttachmentInfo{
+        .image_view = self.swap_chain_image_views.items[image_index],
+        .image_layout = .color_attachment_optimal,
+        .load_op = .clear,
+        .store_op = .store,
+        .clear_value = clear_color,
+    };
+
+    const rendering_info = vk.RenderingInfo{
+        .render_area = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swap_chain_extent },
+    };
+    self.device.cmdBeginRendering(self.command_buffer, rendering_info);
+    self.device.cmdBindPipeline(self.command_buffer, .graphics, self.graphics_pipeline);
+    const view_port = vk.Viewport{
+        .x = 0,
+        .y = 0,
+        .width = @floatFromInt(self.swap_chain_extent.width),
+        .height = @floatFromInt(self.swap_chain_extent.height),
+        .min_depth = 0,
+        .max_depth = 1,
+    };
+    const scissor = vk.Rect2D{
+        .offset = .{ .x = 0, .y = 0 },
+        .extent = self.swap_chain_extent,
+    };
+    self.device.cmdSetViewport(self.command_buffer, 0, .{view_port});
+    self.device.cmdSetScissor(self.command_buffer, 0, .{scissor});
+    self.device.cmdDraw(self.command_buffer, 3, 1, 0, 0);
+    self.device.cmdEndRendering(self.command_buffer);
+    transition_image_layout_params.old_layout = .color_attachment_optimal;
+    transition_image_layout_params.new_layout = .present_src_khr;
+    transition_image_layout_params.src_access_mask = .{ .color_attachment_write_bit = true };
+    transition_image_layout_params.dest_access_mask = .{};
+    transition_image_layout_params.dest_stage_mask = .{ .bottom_of_pipe_bit = true };
+    self.transitionImageLayout(transition_image_layout_params);
+    try self.device.endCommandBuffer(self.command_buffer);
+}
+
+fn transitionImageLayout(self: *App, params: Transition_Image_Layout_Params) void {
+    const subresource_range = vk.ImageSubresourceRange{
+        .aspect_mask = .{ .color_bit = true },
+        .base_mip_level = 0,
+        .level_count = 1,
+        .base_array_layer = 0,
+        .layer_count = 1,
+    };
+    const barrier = vk.ImageMemoryBarrier2{
+        .src_stage_mask = params.src_stage_mask,
+        .src_access_mask = params.src_access_mask,
+        .dst_stage_mask = params.dest_stage_mask,
+        .dst_access_mask = params.dest_access_mask,
+        .old_layout = params.old_layout,
+        .new_layout = params.new_layout,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = self.swap_chain_images[params.image_index],
+        .subresource_range = subresource_range,
+    };
+    const dependency_info = vk.DependencyInfo{
+        .dependency_flags = .{},
+        .image_memory_barrier_count = 1,
+        .p_image_memory_barriers = &.{barrier},
+    };
+    self.device.cmdPipelineBarrier2(self.command_buffer, &dependency_info);
 }
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
