@@ -41,6 +41,9 @@ pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
 command_buffer: vk.CommandBuffer = undefined,
+present_complete_semaphore: vk.Semaphore = undefined,
+render_finished_semaphore: vk.Semaphore = undefined,
+draw_fence: vk.Fence = undefined,
 
 const App = @This();
 
@@ -77,11 +80,12 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createSurface();
     try self.pickPhysicalDevice(alloc);
     try self.createLogicalDevice(alloc);
-    try self.createSwapChain(alloc);
+    try self.createSwapChain();
     try self.createImageViews(alloc);
     try self.createGraphicsPipeline();
     try self.createCommandPool(alloc);
     try self.createCommandBuffer(alloc);
+    try self.createSyncObjects();
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -666,7 +670,17 @@ fn transitionImageLayout(self: *App, params: Transition_Image_Layout_Params) voi
     };
     self.device.cmdPipelineBarrier2(self.command_buffer, &dependency_info);
 }
-fn drawFrame() void {}
+fn createSyncObjects(self: *App) !void {
+    self.present_complete_semaphore = self.device.createSemaphore(.{}, null);
+    self.render_finished_semaphore = self.device.createSemaphore(.{}, null);
+    const fence_create_info = vk.FenceCreateInfo{ .flags = .{ .signaled_bit = true } };
+    self.draw_fence = self.device.createFence(fence_create_info, null);
+}
+fn drawFrame(self: *App) !void {
+    _ = try self.device.waitForFences(.{self.draw_fence}, .true, @intCast(std.math.maxInt(u64)));
+    self.device.resetFences(.{self.draw_fence});
+    self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), self.present_complete_semaphore, .null_handle);
+}
 fn mainLoop(self: *App) void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
