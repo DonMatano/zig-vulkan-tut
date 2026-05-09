@@ -33,10 +33,10 @@ queue: Queue = undefined,
 queue_index: u32 = undefined,
 surface: vk.SurfaceKHR = undefined,
 swap_chain: vk.SwapchainKHR = undefined,
-swap_chain_images: std.ArrayList(vk.Image) = undefined,
+swap_chain_images: []vk.Image = undefined,
 swap_chain_image_format: vk.Format = undefined,
 swap_chain_extent: vk.Extent2D = undefined,
-swap_chain_image_views: std.ArrayList(vk.ImageView) = undefined,
+swap_chain_image_views: []vk.ImageView = undefined,
 pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
@@ -65,7 +65,7 @@ pub fn run(alloc: Alloc) !void {
     try app.initWindow();
     try app.initVulkan(alloc);
     defer app.cleanup();
-    app.mainLoop();
+    try app.mainLoop();
 }
 
 fn initWindow(self: *App) !void {
@@ -80,11 +80,11 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createSurface();
     try self.pickPhysicalDevice(alloc);
     try self.createLogicalDevice(alloc);
-    try self.createSwapChain();
+    try self.createSwapChain(alloc);
     try self.createImageViews(alloc);
     try self.createGraphicsPipeline();
-    try self.createCommandPool(alloc);
-    try self.createCommandBuffer(alloc);
+    try self.createCommandPool();
+    try self.createCommandBuffer();
     try self.createSyncObjects();
 }
 
@@ -204,13 +204,14 @@ fn createSwapChain(self: *App, alloc: Alloc) !void {
     const images = try self.device.getSwapchainImagesAllocKHR(self.swap_chain, alloc);
     defer alloc.free(images);
 
-    self.swap_chain_images = .initBuffer(images);
+    @memcpy(self.swap_chain_images.ptr, images);
 }
 
 fn createImageViews(self: *App, alloc: Alloc) !void {
-    self.swap_chain_image_views = .empty;
-    if (self.swap_chain_image_views.items.len != 0) {
-        app_log.err("Expected no image_views but got {d}", .{self.swap_chain_image_views.items.len});
+    var swap_chain_image_views = try std.ArrayList(vk.ImageView).initCapacity(alloc, self.swap_chain_images.len);
+    defer swap_chain_image_views.deinit(alloc);
+    if (swap_chain_image_views.items.len != 0) {
+        app_log.err("Expected no image_views but got {d}", .{swap_chain_image_views.items.len});
         return error.ImageViewsListIsNotEmpty;
     }
     var image_view_info: vk.ImageViewCreateInfo = .{
@@ -221,16 +222,17 @@ fn createImageViews(self: *App, alloc: Alloc) !void {
         .components = .{ .a = .identity, .b = .identity, .g = .identity, .r = .identity },
     };
 
-    for (self.swap_chain_images.items) |swap_chain_image| {
+    for (self.swap_chain_images) |swap_chain_image| {
         image_view_info.image = swap_chain_image;
         const image_view = try self.device.createImageView(&image_view_info, null);
-        try self.swap_chain_image_views.append(alloc, image_view);
+        try swap_chain_image_views.append(alloc, image_view);
     }
     errdefer {
-        for (self.swap_chain_image_views) |image_view| {
+        for (swap_chain_image_views.items) |image_view| {
             self.device.destroyImageView(image_view, null);
         }
     }
+    self.swap_chain_image_views = try swap_chain_image_views.toOwnedSlice(alloc);
 }
 
 fn chooseSwapSurfaceFormat(available_formats: []vk.SurfaceFormatKHR) !vk.SurfaceFormatKHR {
@@ -571,10 +573,10 @@ fn createCommandBuffer(self: *App) !void {
         .level = .primary,
     };
 
-    const command_buffers = [_]vk.CommandBuffer{
+    var command_buffers = [_]vk.CommandBuffer{
         self.command_buffer,
     };
-    self.device.allocateCommandBuffers(&alloc_info, &command_buffers);
+    try self.device.allocateCommandBuffers(&alloc_info, @ptrCast(&command_buffers));
     errdefer self.device.freeCommandBuffers(self.command_pool, command_buffers);
 }
 
@@ -603,11 +605,13 @@ fn recordCommandBuffer(self: App, image_index: u32) !void {
         .color = .{ .float_32 = .{ 0, 0, 0, 1 } },
     };
     const attachment_info = vk.RenderingAttachmentInfo{
-        .image_view = self.swap_chain_image_views.items[image_index],
+        .image_view = self.swap_chain_image_views[image_index],
         .image_layout = .color_attachment_optimal,
         .load_op = .clear,
         .store_op = .store,
         .clear_value = clear_color,
+        .resolve_mode = .{},
+        .resolve_image_layout = .undefined,
     };
 
     const rendering_info = vk.RenderingInfo{
@@ -615,8 +619,9 @@ fn recordCommandBuffer(self: App, image_index: u32) !void {
         .layer_count = 1,
         .color_attachment_count = 1,
         .p_color_attachments = &.{attachment_info},
+        .view_mask = 0,
     };
-    self.device.cmdBeginRendering(self.command_buffer, rendering_info);
+    self.device.cmdBeginRendering(self.command_buffer, &rendering_info);
     self.device.cmdBindPipeline(self.command_buffer, .graphics, self.graphics_pipeline);
     const view_port = vk.Viewport{
         .x = 0,
@@ -630,8 +635,8 @@ fn recordCommandBuffer(self: App, image_index: u32) !void {
         .offset = .{ .x = 0, .y = 0 },
         .extent = self.swap_chain_extent,
     };
-    self.device.cmdSetViewport(self.command_buffer, 0, .{view_port});
-    self.device.cmdSetScissor(self.command_buffer, 0, .{scissor});
+    self.device.cmdSetViewport(self.command_buffer, 0, &.{view_port});
+    self.device.cmdSetScissor(self.command_buffer, 0, &.{scissor});
     self.device.cmdDraw(self.command_buffer, 3, 1, 0, 0);
     self.device.cmdEndRendering(self.command_buffer);
     transition_image_layout_params.old_layout = .color_attachment_optimal;
@@ -643,7 +648,7 @@ fn recordCommandBuffer(self: App, image_index: u32) !void {
     try self.device.endCommandBuffer(self.command_buffer);
 }
 
-fn transitionImageLayout(self: *App, params: Transition_Image_Layout_Params) void {
+fn transitionImageLayout(self: App, params: Transition_Image_Layout_Params) void {
     const subresource_range = vk.ImageSubresourceRange{
         .aspect_mask = .{ .color_bit = true },
         .base_mip_level = 0,
@@ -671,27 +676,47 @@ fn transitionImageLayout(self: *App, params: Transition_Image_Layout_Params) voi
     self.device.cmdPipelineBarrier2(self.command_buffer, &dependency_info);
 }
 fn createSyncObjects(self: *App) !void {
-    self.present_complete_semaphore = self.device.createSemaphore(.{}, null);
-    self.render_finished_semaphore = self.device.createSemaphore(.{}, null);
+    self.present_complete_semaphore = try self.device.createSemaphore(&.{}, null);
+    self.render_finished_semaphore = try self.device.createSemaphore(&.{}, null);
     const fence_create_info = vk.FenceCreateInfo{ .flags = .{ .signaled_bit = true } };
-    self.draw_fence = self.device.createFence(fence_create_info, null);
+    self.draw_fence = try self.device.createFence(&fence_create_info, null);
 }
 fn drawFrame(self: *App) !void {
-    _ = try self.device.waitForFences(.{self.draw_fence}, .true, @intCast(std.math.maxInt(u64)));
-    self.device.resetFences(.{self.draw_fence});
-    self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), self.present_complete_semaphore, .null_handle);
+    _ = try self.device.waitForFences(&.{self.draw_fence}, .true, @intCast(std.math.maxInt(u64)));
+    try self.device.resetFences(&.{self.draw_fence});
+    const swap_chain_aquired_image = try self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), self.present_complete_semaphore, .null_handle);
+    try self.recordCommandBuffer(swap_chain_aquired_image.image_index);
+    const wait_destination_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
+    const submit_info = vk.SubmitInfo{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &.{self.present_complete_semaphore},
+        .p_wait_dst_stage_mask = &.{wait_destination_stage_mask},
+        .command_buffer_count = 1,
+        .p_command_buffers = &.{self.command_buffer},
+        .signal_semaphore_count = 1,
+        .p_signal_semaphores = &.{self.render_finished_semaphore},
+    };
+    try self.device.queueSubmit(self.queue.handle, &.{submit_info}, self.draw_fence);
+    const presentation_info = vk.PresentInfoKHR{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &.{self.render_finished_semaphore},
+        .swapchain_count = 1,
+        .p_swapchains = &.{self.swap_chain},
+        .p_image_indices = &.{swap_chain_aquired_image.image_index},
+    };
+    _ = try self.device.queuePresentKHR(self.queue.handle, &presentation_info);
 }
-fn mainLoop(self: *App) void {
+fn mainLoop(self: *App) !void {
     while (!self.window.shouldClose()) {
         glfw.pollEvents();
-        drawFrame();
+        try self.drawFrame();
     }
 }
 fn cleanup(self: *App) void {
     self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
-    for (self.swap_chain_image_views.items) |image_view| {
+    for (self.swap_chain_image_views) |image_view| {
         self.device.destroyImageView(image_view, null);
     }
     self.device.destroySwapchainKHR(self.swap_chain, null);
