@@ -54,6 +54,7 @@ const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const required_device_extensions = [_][*:0]const u8{
     vk.extensions.khr_swapchain.name,
     vk.extensions.khr_shader_draw_parameters.name,
+    vk.extensions.khr_synchronization_2.name,
 };
 const validationLayersEnabled: bool = builtin.mode == .Debug;
 const QueueFamilyIndices = struct {
@@ -76,7 +77,7 @@ fn initWindow(self: *App) !void {
     try glfw.init();
     try glfw.setClientApi(.glfw_no_api);
     try glfw.isResizable(false);
-    self.window = try glfw.Window.init(800, 1280, "Vulkan");
+    self.window = try glfw.Window.init(1080, 720, "Vulkan");
 }
 fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createInstance(alloc);
@@ -141,7 +142,6 @@ fn createInstance(self: *App, alloc: Alloc) !void {
 
 fn setupDebugMessenger(self: *App) !void {
     if (!validationLayersEnabled) return;
-    // self.instance.destroyDebugUtilsMessengerEXT(messenger: DebugUtilsMessengerEXT, p_allocator: ?*const AllocationCallbacks)
     const debug_utils: vk.DebugUtilsMessengerCreateInfoEXT = .{
         .message_severity = .{
             // .verbose_bit_ext = true,
@@ -209,6 +209,7 @@ fn createSwapChain(self: *App, alloc: Alloc) !void {
     const images = try self.device.getSwapchainImagesAllocKHR(self.swap_chain, alloc);
     // defer alloc.free(images);
     self.swap_chain_images = images;
+    self.swap_chain_extent = swap_chain_extent;
     // @memcpy(self.swap_chain_images.ptr, images);
 }
 
@@ -219,8 +220,6 @@ fn createImageViews(self: *App, alloc: Alloc) !void {
         app_log.err("Expected no image_views but got {d}", .{swap_chain_image_views.items.len});
         return error.ImageViewsListIsNotEmpty;
     }
-    app_log.debug("swap chain images  {d}", .{self.swap_chain_images.len});
-    app_log.debug("created image_views  {d}", .{swap_chain_image_views.items.len});
     var image_view_info: vk.ImageViewCreateInfo = .{
         .view_type = .@"2d",
         .image = undefined,
@@ -230,16 +229,11 @@ fn createImageViews(self: *App, alloc: Alloc) !void {
     };
 
     for (self.swap_chain_images) |swap_chain_image| {
-        app_log.debug("images gotten {}", .{swap_chain_image});
-
         image_view_info.image = swap_chain_image;
-        app_log.debug("images gotten {}", .{image_view_info.image});
-        app_log.debug("image view info {}", .{image_view_info});
         const image_view = try self.device.createImageView(&image_view_info, null);
-        app_log.debug("created image view", .{});
         try swap_chain_image_views.append(alloc, image_view);
     }
-    errdefer {
+    defer {
         for (swap_chain_image_views.items) |image_view| {
             self.device.destroyImageView(image_view, null);
         }
@@ -415,6 +409,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
     var vk_13_features = vk.PhysicalDeviceVulkan13Features{
         .p_next = &dynamic_state_features,
         .dynamic_rendering = .true,
+        .synchronization_2 = .true,
     };
 
     const feature_2 = vk.PhysicalDeviceFeatures2{ .p_next = &vk_13_features, .features = .{} };
@@ -451,9 +446,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 
 fn createGraphicsPipeline(self: *App) !void {
     var shader_code align(@alignOf(u32)) = shader.*;
-    app_log.debug("align {}", .{@alignOf(@TypeOf(shader_code))});
     const shader_module = try createShaderModule(&self.device, @ptrCast(@alignCast(&shader_code)), shader_code.len);
-    app_log.debug("out of shader module", .{});
     defer self.device.destroyShaderModule(shader_module, null);
     const vert_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
         .stage = .{ .vertex_bit = true },
@@ -563,12 +556,10 @@ fn createGraphicsPipeline(self: *App) !void {
 }
 
 fn createShaderModule(device: *Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
-    app_log.debug("align {}", .{@alignOf(@TypeOf(code))});
     const create_info: vk.ShaderModuleCreateInfo = .{
         .code_size = code_size,
         .p_code = @ptrCast(code),
     };
-    app_log.debug("in of shader module", .{});
     return try device.createShaderModule(&create_info, null);
 }
 
@@ -606,9 +597,7 @@ const Transition_Image_Layout_Params = struct {
     dest_stage_mask: vk.PipelineStageFlags2,
 };
 fn recordCommandBuffer(self: *App, image_index: u32) !void {
-    app_log.debug("reached 0 ended here {}", .{self.command_buffer});
     try self.device.beginCommandBuffer(self.command_buffer, &.{});
-    app_log.debug("reached 1 ended here", .{});
     var transition_image_layout_params = Transition_Image_Layout_Params{
         .image_index = image_index,
         .old_layout = .undefined,
@@ -641,6 +630,7 @@ fn recordCommandBuffer(self: *App, image_index: u32) !void {
     };
     self.device.cmdBeginRendering(self.command_buffer, &rendering_info);
     self.device.cmdBindPipeline(self.command_buffer, .graphics, self.graphics_pipeline);
+    // app_log.debug("swap chain extent width {d}", .{self.swap_chain_extent.width});
     const view_port = vk.Viewport{
         .x = 0,
         .y = 0,
@@ -649,6 +639,7 @@ fn recordCommandBuffer(self: *App, image_index: u32) !void {
         .min_depth = 0,
         .max_depth = 1,
     };
+    // app_log.debug("View port width {d}", .{view_port.width});
     const scissor = vk.Rect2D{
         .offset = .{ .x = 0, .y = 0 },
         .extent = self.swap_chain_extent,
@@ -674,8 +665,6 @@ fn transitionImageLayout(self: App, params: Transition_Image_Layout_Params) void
         .base_array_layer = 0,
         .layer_count = 1,
     };
-    app_log.debug("swapchain images len {d}", .{self.swap_chain_images.len});
-    app_log.debug("swapchain image_index  {d}", .{params.image_index});
     const barrier = vk.ImageMemoryBarrier2{
         .src_stage_mask = params.src_stage_mask,
         .src_access_mask = params.src_access_mask,
@@ -705,9 +694,8 @@ fn drawFrame(self: *App) !void {
     _ = try self.device.waitForFences(&.{self.draw_fence}, .true, @intCast(std.math.maxInt(u64)));
     try self.device.resetFences(&.{self.draw_fence});
     const swap_chain_aquired_image = try self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), self.present_complete_semaphore, .null_handle);
-    app_log.debug("reached here now", .{});
+    // app_log.debug("reached here now", .{});
     try self.recordCommandBuffer(swap_chain_aquired_image.image_index);
-    app_log.debug("reached here", .{});
     const wait_destination_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
     const submit_info = vk.SubmitInfo{
         .wait_semaphore_count = 1,
@@ -727,6 +715,7 @@ fn drawFrame(self: *App) !void {
         .p_image_indices = &.{swap_chain_aquired_image.image_index},
     };
     _ = try self.device.queuePresentKHR(self.queue.handle, &presentation_info);
+    try self.device.deviceWaitIdle();
 }
 fn mainLoop(self: *App) !void {
     while (!self.window.shouldClose()) {
@@ -735,6 +724,9 @@ fn mainLoop(self: *App) !void {
     }
 }
 fn cleanup(self: *App, alloc: Alloc) void {
+    self.device.destroyFence(self.draw_fence, null);
+    self.device.destroySemaphore(self.render_finished_semaphore, null);
+    self.device.destroySemaphore(self.present_complete_semaphore, null);
     self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
