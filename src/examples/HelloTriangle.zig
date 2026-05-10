@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
-const shader = @embedFile("shader");
+// const shader = @embedFile("shader");
 
 const Alloc = std.mem.Allocator;
 
@@ -445,8 +445,7 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 }
 
 fn createGraphicsPipeline(self: *App) !void {
-    var shader_code align(@alignOf(u32)) = shader.*;
-    const shader_module = try createShaderModule(&self.device, @ptrCast(@alignCast(&shader_code)), shader_code.len);
+    const shader_module = try createShaderModule(&self.device);
     defer self.device.destroyShaderModule(shader_module, null);
     const vert_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
         .stage = .{ .vertex_bit = true },
@@ -462,19 +461,6 @@ fn createGraphicsPipeline(self: *App) !void {
     const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
     const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
     const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list, .primitive_restart_enable = .false };
-
-    // const viewport: vk.Viewport = .{
-    //     .x = 0,
-    //     .y = 0,
-    //     .width = @intCast(self.swap_chain_extent.width),
-    //     .height = @intCast(self.swap_chain_extent.height),
-    //     .min_depth = 0,
-    //     .max_depth = 1,
-    // };
-    // const scissor: vk.Rect2D = .{
-    //     .offset = vk.Offset2D{ .x = 0, .y = 0 },
-    //     .extent = self.swap_chain_extent,
-    // };
 
     const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
 
@@ -555,10 +541,11 @@ fn createGraphicsPipeline(self: *App) !void {
     _ = try self.device.createGraphicsPipelines(.null_handle, &.{graphics_pipeline_create_info}, null, (&self.graphics_pipeline)[0..1]);
 }
 
-fn createShaderModule(device: *Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
+fn createShaderModule(device: *Device) !vk.ShaderModule {
+    const shader_spv align(@alignOf(u32)) = @embedFile("shader").*;
     const create_info: vk.ShaderModuleCreateInfo = .{
-        .code_size = code_size,
-        .p_code = @ptrCast(code),
+        .code_size = shader_spv.len,
+        .p_code = @ptrCast(&shader_spv),
     };
     return try device.createShaderModule(&create_info, null);
 }
