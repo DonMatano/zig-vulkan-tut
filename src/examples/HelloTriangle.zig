@@ -48,9 +48,13 @@ draw_fence: vk.Fence = undefined,
 const App = @This();
 
 const app_log = std.log.scoped(.App);
+const validation_log = std.log.scoped(.Validation_Log);
 
 const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
-const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
+const required_device_extensions = [_][*:0]const u8{
+    vk.extensions.khr_swapchain.name,
+    vk.extensions.khr_shader_draw_parameters.name,
+};
 const validationLayersEnabled: bool = builtin.mode == .Debug;
 const QueueFamilyIndices = struct {
     graphics_family: u32,
@@ -64,7 +68,7 @@ pub fn run(alloc: Alloc) !void {
     var app = App{};
     try app.initWindow();
     try app.initVulkan(alloc);
-    defer app.cleanup();
+    defer app.cleanup(alloc);
     try app.mainLoop();
 }
 
@@ -162,7 +166,7 @@ fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, m
     const message: [*c]const u8 = if (callback_data) |cb_data| cb_data.p_message else "NO MESSAGE!";
     // std.debug.print("[{s}][{s}]. Message:\n  {s}\n", .{ severity_str, type_str, message });
     // if (severity >= .) {}
-    std.debug.print("{s}: validation layer type {s}\n msg:{s}\n", .{ severity_str, type_str, message });
+    validation_log.debug("{s}: validation layer type {s}\n msg:{s}\n", .{ severity_str, type_str, message });
 
     return .false;
 }
@@ -199,12 +203,13 @@ fn createSwapChain(self: *App, alloc: Alloc) !void {
         app_log.err("SwapChain creationg Failed", .{});
         return error.SwapChainCreationFailed;
     };
+    self.swap_chain_image_format = swap_chain_surface_format.format;
     errdefer self.device.destroySwapchainKHR(self.swap_chain, null);
 
     const images = try self.device.getSwapchainImagesAllocKHR(self.swap_chain, alloc);
-    defer alloc.free(images);
-
-    @memcpy(self.swap_chain_images.ptr, images);
+    // defer alloc.free(images);
+    self.swap_chain_images = images;
+    // @memcpy(self.swap_chain_images.ptr, images);
 }
 
 fn createImageViews(self: *App, alloc: Alloc) !void {
@@ -214,6 +219,8 @@ fn createImageViews(self: *App, alloc: Alloc) !void {
         app_log.err("Expected no image_views but got {d}", .{swap_chain_image_views.items.len});
         return error.ImageViewsListIsNotEmpty;
     }
+    app_log.debug("swap chain images  {d}", .{self.swap_chain_images.len});
+    app_log.debug("created image_views  {d}", .{swap_chain_image_views.items.len});
     var image_view_info: vk.ImageViewCreateInfo = .{
         .view_type = .@"2d",
         .image = undefined,
@@ -223,8 +230,13 @@ fn createImageViews(self: *App, alloc: Alloc) !void {
     };
 
     for (self.swap_chain_images) |swap_chain_image| {
+        app_log.debug("images gotten {}", .{swap_chain_image});
+
         image_view_info.image = swap_chain_image;
+        app_log.debug("images gotten {}", .{image_view_info.image});
+        app_log.debug("image view info {}", .{image_view_info});
         const image_view = try self.device.createImageView(&image_view_info, null);
+        app_log.debug("created image view", .{});
         try swap_chain_image_views.append(alloc, image_view);
     }
     errdefer {
@@ -364,12 +376,12 @@ fn checkExtensionSupport(instance: Instance, physical_device: vk.PhysicalDevice,
     const device_props = try instance.enumerateDeviceExtensionPropertiesAlloc(physical_device, null, alloc);
     defer alloc.free(device_props);
 
-    if (builtin.mode == .Debug) {
-        app_log.debug("Available device extensions: ", .{});
-        for (device_props, 0..) |ext, i| {
-            app_log.debug("{d}: {s}", .{ i, ext.extension_name });
-        }
-    }
+    // if (builtin.mode == .Debug) {
+    //     app_log.debug("Available device extensions: ", .{});
+    //     for (device_props, 0..) |ext, i| {
+    //         app_log.debug("{d}: {s}", .{ i, ext.extension_name });
+    //     }
+    // }
 
     for (required_device_extensions) |required_extension| {
         for (device_props) |device_prop| {
@@ -440,7 +452,8 @@ fn createLogicalDevice(self: *App, alloc: Alloc) !void {
 fn createGraphicsPipeline(self: *App) !void {
     var shader_code align(@alignOf(u32)) = shader.*;
     app_log.debug("align {}", .{@alignOf(@TypeOf(shader_code))});
-    const shader_module = try createShaderModule(self.device, @ptrCast(@alignCast(&shader_code)), shader_code.len);
+    const shader_module = try createShaderModule(&self.device, @ptrCast(@alignCast(&shader_code)), shader_code.len);
+    app_log.debug("out of shader module", .{});
     defer self.device.destroyShaderModule(shader_module, null);
     const vert_shader_stage_info: vk.PipelineShaderStageCreateInfo = .{
         .stage = .{ .vertex_bit = true },
@@ -523,8 +536,8 @@ fn createGraphicsPipeline(self: *App) !void {
         .color_attachment_count = 1,
         .p_color_attachment_formats = &.{self.swap_chain_image_format},
         .view_mask = 0,
-        .depth_attachment_format = self.swap_chain_image_format,
-        .stencil_attachment_format = self.swap_chain_image_format,
+        .depth_attachment_format = .undefined,
+        .stencil_attachment_format = .undefined,
     };
 
     const pipeline_layout_info = vk.PipelineLayoutCreateInfo{};
@@ -549,12 +562,13 @@ fn createGraphicsPipeline(self: *App) !void {
     _ = try self.device.createGraphicsPipelines(.null_handle, &.{graphics_pipeline_create_info}, null, (&self.graphics_pipeline)[0..1]);
 }
 
-fn createShaderModule(device: Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
+fn createShaderModule(device: *Device, code: *[]const u32, code_size: usize) !vk.ShaderModule {
     app_log.debug("align {}", .{@alignOf(@TypeOf(code))});
     const create_info: vk.ShaderModuleCreateInfo = .{
         .code_size = code_size,
         .p_code = @ptrCast(code),
     };
+    app_log.debug("in of shader module", .{});
     return try device.createShaderModule(&create_info, null);
 }
 
@@ -572,12 +586,14 @@ fn createCommandBuffer(self: *App) !void {
         .command_buffer_count = 1,
         .level = .primary,
     };
+    const cmd_buf: vk.CommandBuffer = undefined;
 
     var command_buffers = [_]vk.CommandBuffer{
-        self.command_buffer,
+        cmd_buf,
     };
     try self.device.allocateCommandBuffers(&alloc_info, @ptrCast(&command_buffers));
     errdefer self.device.freeCommandBuffers(self.command_pool, command_buffers);
+    self.command_buffer = command_buffers[0];
 }
 
 const Transition_Image_Layout_Params = struct {
@@ -589,8 +605,10 @@ const Transition_Image_Layout_Params = struct {
     src_stage_mask: vk.PipelineStageFlags2,
     dest_stage_mask: vk.PipelineStageFlags2,
 };
-fn recordCommandBuffer(self: App, image_index: u32) !void {
+fn recordCommandBuffer(self: *App, image_index: u32) !void {
+    app_log.debug("reached 0 ended here {}", .{self.command_buffer});
     try self.device.beginCommandBuffer(self.command_buffer, &.{});
+    app_log.debug("reached 1 ended here", .{});
     var transition_image_layout_params = Transition_Image_Layout_Params{
         .image_index = image_index,
         .old_layout = .undefined,
@@ -656,6 +674,8 @@ fn transitionImageLayout(self: App, params: Transition_Image_Layout_Params) void
         .base_array_layer = 0,
         .layer_count = 1,
     };
+    app_log.debug("swapchain images len {d}", .{self.swap_chain_images.len});
+    app_log.debug("swapchain image_index  {d}", .{params.image_index});
     const barrier = vk.ImageMemoryBarrier2{
         .src_stage_mask = params.src_stage_mask,
         .src_access_mask = params.src_access_mask,
@@ -685,7 +705,9 @@ fn drawFrame(self: *App) !void {
     _ = try self.device.waitForFences(&.{self.draw_fence}, .true, @intCast(std.math.maxInt(u64)));
     try self.device.resetFences(&.{self.draw_fence});
     const swap_chain_aquired_image = try self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), self.present_complete_semaphore, .null_handle);
+    app_log.debug("reached here now", .{});
     try self.recordCommandBuffer(swap_chain_aquired_image.image_index);
+    app_log.debug("reached here", .{});
     const wait_destination_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
     const submit_info = vk.SubmitInfo{
         .wait_semaphore_count = 1,
@@ -712,13 +734,15 @@ fn mainLoop(self: *App) !void {
         try self.drawFrame();
     }
 }
-fn cleanup(self: *App) void {
+fn cleanup(self: *App, alloc: Alloc) void {
     self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
     for (self.swap_chain_image_views) |image_view| {
         self.device.destroyImageView(image_view, null);
     }
+    alloc.free(self.swap_chain_images);
+
     self.device.destroySwapchainKHR(self.swap_chain, null);
     self.device.destroyDevice(null);
     if (validationLayersEnabled) {
