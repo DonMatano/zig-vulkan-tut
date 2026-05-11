@@ -734,10 +734,11 @@ fn mainLoop(self: *App, alloc: Alloc) !void {
     try self.createCommandBuffers(&command_buffers);
     const sync_objects = try self.createSyncObjects(alloc);
     defer {
-        for (0..MAX_INFLIGHT_FRAMES) |i| {
-            app_log.debug("Deleting fences and semaphores of index {d}", .{i});
-            self.device.destroyFence(sync_objects.in_flight_fences[i], null);
+        for (self.swap_chain_images, 0..) |_, i| {
             self.device.destroySemaphore(sync_objects.render_finished_semaphores[i], null);
+        }
+        for (0..MAX_INFLIGHT_FRAMES) |i| {
+            self.device.destroyFence(sync_objects.in_flight_fences[i], null);
             self.device.destroySemaphore(sync_objects.present_complete_semaphores[i], null);
         }
     }
