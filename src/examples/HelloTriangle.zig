@@ -774,6 +774,7 @@ fn drawFrame(
     };
     if (res == .suboptimal_khr or self.frame_buffer_resized) {
         try self.recreateSwapChain(alloc);
+        self.frame_buffer_resized = false;
     }
     self.frame_index = (self.frame_index + 1) % MAX_INFLIGHT_FRAMES;
     try self.device.deviceWaitIdle();
