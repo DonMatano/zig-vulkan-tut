@@ -41,6 +41,7 @@ pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
 frame_index: u32 = 0,
+frame_buffer_resized: bool = false,
 
 const App = @This();
 
@@ -73,8 +74,14 @@ pub fn run(alloc: Alloc) !void {
 fn initWindow(self: *App) !void {
     try glfw.init();
     try glfw.setClientApi(.glfw_no_api);
-    try glfw.isResizable(false);
+    try glfw.isResizable(true);
     self.window = try glfw.Window.init(1080, 720, "Vulkan");
+    self.window.setUserPointer(@ptrCast(self));
+    try self.window.setFrameBufferSizeCallback(frameBufferResizeCallback);
+}
+fn frameBufferResizeCallback(c_gflw_window: ?*glfw.c_glfw_window, _: c_int, _: c_int) callconv(.c) void {
+    const self: *App = @ptrCast(@alignCast(glfw.get_c_glfw_getWindowUserPoint(c_gflw_window.?)));
+    self.frame_buffer_resized = true;
 }
 fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createInstance(alloc);
@@ -207,6 +214,24 @@ fn createSwapChain(self: *App, alloc: Alloc) !void {
     self.swap_chain_extent = swap_chain_extent;
     // @memcpy(self.swap_chain_images.ptr, images);
 }
+fn recreateSwapChain(self: *App, alloc: Alloc) !void {
+    var dimension = self.window.getFrameBufferSize();
+    var already_shown_minimized_log = false;
+
+    if (dimension.width == 0 or dimension.height == 0) {
+        if (!already_shown_minimized_log) {
+            app_log.debug("Screen minimized", .{});
+            already_shown_minimized_log = true;
+        }
+        dimension = self.window.getFrameBufferSize();
+        glfw.waitEvents();
+    }
+    already_shown_minimized_log = false;
+    try self.device.deviceWaitIdle();
+    self.cleanupSwapChain(alloc);
+    try self.createSwapChain(alloc);
+    try self.createImageViews(alloc);
+}
 
 fn createImageViews(self: *App, alloc: Alloc) !void {
     var swap_chain_image_views = try std.ArrayList(vk.ImageView).initCapacity(alloc, self.swap_chain_images.len);
@@ -307,14 +332,14 @@ fn checkLayerSupport(vkb: *const BaseWrapper, alloc: Alloc) !bool {
 fn pickPhysicalDevice(self: *App, alloc: Alloc) !void {
     const physical_devices = try self.instance.enumeratePhysicalDevicesAlloc(alloc);
     app_log.debug("Physical devices found :", .{});
-    for (physical_devices, 0..) |ph_dev, i| {
-        const device_properties = self.instance.getPhysicalDeviceProperties(ph_dev);
-        app_log.debug("{d}: {s}, type: {s}", .{ i, device_properties.device_name, @tagName(device_properties.device_type) });
-    }
     defer alloc.free(physical_devices);
     if (physical_devices.len == 0) {
         app_log.err("Failed to find GPUs with Vulkan support", .{});
         return error.NoPhysicalDevicesFound;
+    }
+    for (physical_devices, 0..) |ph_dev, i| {
+        const device_properties = self.instance.getPhysicalDeviceProperties(ph_dev);
+        app_log.debug("{d}: {s}, type: {s}", .{ i, device_properties.device_name, @tagName(device_properties.device_type) });
     }
 
     for (physical_devices) |physical_device| {
@@ -701,10 +726,21 @@ fn drawFrame(
     present_compelete_semaphore: vk.Semaphore,
     render_finished_semaphore: vk.Semaphore,
     command_buffer: *vk.CommandBuffer,
+    alloc: Alloc,
 ) !void {
     _ = try self.device.waitForFences(&.{in_flight_fence}, .true, @intCast(std.math.maxInt(u64)));
+    const swap_chain_aquired_image = self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), present_compelete_semaphore, .null_handle) catch |err| switch (err) {
+        error.OutOfDateKHR => {
+            app_log.debug("Image is out of date. Recreating swapchaing", .{});
+            try self.recreateSwapChain(alloc);
+            return;
+        },
+        else => {
+            app_log.err("Failed to queuePresent, {}", .{err});
+            return err;
+        },
+    };
     try self.device.resetFences(&.{in_flight_fence});
-    const swap_chain_aquired_image = try self.device.acquireNextImageKHR(self.swap_chain, @intCast(std.math.maxInt(u64)), present_compelete_semaphore, .null_handle);
     try self.device.resetCommandBuffer(command_buffer.*, .{});
     try self.recordCommandBuffer(command_buffer.*, swap_chain_aquired_image.image_index);
     const wait_destination_stage_mask = vk.PipelineStageFlags{ .color_attachment_output_bit = true };
@@ -725,9 +761,22 @@ fn drawFrame(
         .p_swapchains = &.{self.swap_chain},
         .p_image_indices = &.{swap_chain_aquired_image.image_index},
     };
-    _ = try self.device.queuePresentKHR(self.queue.handle, &presentation_info);
-    try self.device.deviceWaitIdle();
+    const res = self.device.queuePresentKHR(self.queue.handle, &presentation_info) catch |err| switch (err) {
+        error.OutOfDateKHR => {
+            app_log.err("Image is out of date. Recreating swapchaing", .{});
+            try self.recreateSwapChain(alloc);
+            return;
+        },
+        else => {
+            app_log.err("Failed to queuePresent, {}", .{err});
+            return err;
+        },
+    };
+    if (res == .suboptimal_khr or self.frame_buffer_resized) {
+        try self.recreateSwapChain(alloc);
+    }
     self.frame_index = (self.frame_index + 1) % MAX_INFLIGHT_FRAMES;
+    try self.device.deviceWaitIdle();
 }
 fn mainLoop(self: *App, alloc: Alloc) !void {
     var command_buffers: [MAX_INFLIGHT_FRAMES]vk.CommandBuffer = undefined;
@@ -749,19 +798,26 @@ fn mainLoop(self: *App, alloc: Alloc) !void {
             sync_objects.present_complete_semaphores[self.frame_index],
             sync_objects.render_finished_semaphores[self.frame_index],
             &command_buffers[self.frame_index],
+            alloc,
         );
     }
 }
+
+fn cleanupSwapChain(self: *App, alloc: Alloc) void {
+    for (self.swap_chain_image_views) |image_view| {
+        self.device.destroyImageView(image_view, null);
+    }
+    alloc.free(self.swap_chain_image_views);
+    self.device.destroySwapchainKHR(self.swap_chain, null);
+}
+
 fn cleanup(self: *App, alloc: Alloc) void {
     self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
-    for (self.swap_chain_image_views) |image_view| {
-        self.device.destroyImageView(image_view, null);
-    }
     alloc.free(self.swap_chain_images);
+    self.cleanupSwapChain(alloc);
 
-    self.device.destroySwapchainKHR(self.swap_chain, null);
     self.device.destroyDevice(null);
     if (validationLayersEnabled) {
         self.instance.destroyDebugUtilsMessengerEXT(self.debug_messenger, null);

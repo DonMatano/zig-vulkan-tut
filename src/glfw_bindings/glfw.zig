@@ -19,6 +19,12 @@ const GLFW_log = std.log.scoped(.GLFW);
 const Glfw = @This();
 
 // Types
+//
+pub const c_glfw_window = glfw.GLFWwindow;
+
+pub fn get_c_glfw_getWindowUserPoint(window: *c_glfw_window) ?*anyopaque {
+    return glfw.glfwGetWindowUserPointer(window);
+}
 
 pub fn init() !void {
     const res = glfw.glfwInit();
@@ -75,6 +81,10 @@ fn checkWindowHintError() !void {
         logCErr(c_err);
         return error.GLFW_WindowHintError;
     }
+}
+
+pub fn waitEvents() void {
+    glfw.glfwWaitEvents();
 }
 
 pub fn pollEvents() void {
