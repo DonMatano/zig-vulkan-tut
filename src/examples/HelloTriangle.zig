@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("../glfw_bindings/glfw.zig");
 const vk = @import("vulkan");
+var already_logged = false;
 
 const Alloc = std.mem.Allocator;
 
@@ -40,8 +41,30 @@ swap_chain_image_views: []vk.ImageView = undefined,
 pipeline_layout: vk.PipelineLayout = undefined,
 graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
+vertex_buffer: vk.Buffer = undefined,
+vertex_buffer_memory: vk.DeviceMemory = undefined,
 frame_index: u32 = 0,
 frame_buffer_resized: bool = false,
+
+const Vertex = struct {
+    pos: [2]f32,
+    color: [3]f32,
+    const binding_description = vk.VertexInputBindingDescription{
+        .binding = 0,
+        .stride = @sizeOf(Vertex),
+        .input_rate = .vertex,
+    };
+    const attribute_descriptions = [_]vk.VertexInputAttributeDescription{
+        .{ .location = 0, .binding = 0, .format = vk.Format.r32g32_sfloat, .offset = @intCast(@offsetOf(Vertex, "pos")) },
+        .{ .location = 1, .binding = 0, .format = vk.Format.r32g32b32_sfloat, .offset = @intCast(@offsetOf(Vertex, "color")) },
+    };
+};
+
+const vertices = [_]Vertex{
+    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+};
 
 const App = @This();
 
@@ -91,8 +114,9 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createLogicalDevice(alloc);
     try self.createSwapChain(alloc);
     try self.createImageViews(alloc);
-    try self.createGraphicsPipeline();
     try self.createCommandPool();
+    try self.createVertexBuffer();
+    try self.createGraphicsPipeline();
 }
 
 fn listInstanceExtensionSupport(self: App, alloc: Alloc) !void {
@@ -479,7 +503,13 @@ fn createGraphicsPipeline(self: *App) !void {
     };
 
     const shader_stages = [_]vk.PipelineShaderStageCreateInfo{ vert_shader_stage_info, frag_shader_stage_info };
-    const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{};
+
+    const vertex_input_info: vk.PipelineVertexInputStateCreateInfo = .{
+        .vertex_binding_description_count = 1,
+        .p_vertex_binding_descriptions = @ptrCast(&Vertex.binding_description),
+        .vertex_attribute_description_count = @intCast(Vertex.attribute_descriptions.len),
+        .p_vertex_attribute_descriptions = @ptrCast(&Vertex.attribute_descriptions),
+    };
     const input_assembly: vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list, .primitive_restart_enable = .false };
 
     const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
@@ -578,6 +608,40 @@ fn createCommandPool(self: *App) !void {
     self.command_pool = try self.device.createCommandPool(&pool_info, null);
 }
 
+fn createVertexBuffer(self: *App) !void {
+    const buffer_info = vk.BufferCreateInfo{
+        .size = @sizeOf(Vertex) * vertices.len,
+        .usage = .{ .vertex_buffer_bit = true },
+        .sharing_mode = .exclusive,
+    };
+    self.vertex_buffer = try self.device.createBuffer(&buffer_info, null);
+    const mem_requirements = self.device.getBufferMemoryRequirements(self.vertex_buffer);
+    const memory_allocate_info = vk.MemoryAllocateInfo{
+        .allocation_size = mem_requirements.size,
+        .memory_type_index = try self.findMemoryType(mem_requirements.memory_type_bits, vk.MemoryPropertyFlags{
+            .host_visible_bit = true,
+            .host_coherent_bit = true,
+        }),
+    };
+    self.vertex_buffer_memory = try self.device.allocateMemory(&memory_allocate_info, null);
+    try self.device.bindBufferMemory(self.vertex_buffer, self.vertex_buffer_memory, 0);
+    const data = try self.device.mapMemory(self.vertex_buffer_memory, 0, buffer_info.size, .{});
+    const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
+
+    @memcpy(gpu_vertices, vertices[0..]);
+    self.device.unmapMemory(self.vertex_buffer_memory);
+}
+
+fn findMemoryType(self: *App, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
+    const mem_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device);
+    for (0..mem_properties.memory_type_count) |i| {
+        if ((type_filter & @as(u32, 1) << @truncate(i) != 0) and (mem_properties.memory_types[i].property_flags.contains(properties))) {
+            return @truncate(i);
+        }
+    }
+    return error.NoSuitableMemoryType;
+}
+
 fn createCommandBuffers(self: *App, command_buffers: *[MAX_INFLIGHT_FRAMES]vk.CommandBuffer) !void {
     const alloc_info = vk.CommandBufferAllocateInfo{
         .command_pool = self.command_pool,
@@ -641,7 +705,11 @@ fn recordCommandBuffer(self: *App, command_buffer: vk.CommandBuffer, image_index
     };
     self.device.cmdBeginRendering(command_buffer, &rendering_info);
     self.device.cmdBindPipeline(command_buffer, .graphics, self.graphics_pipeline);
-    // app_log.debug("swap chain extent width {d}", .{self.swap_chain_extent.width});
+    if (!already_logged) {
+        app_log.debug("vertex buffer {}", .{self.vertex_buffer});
+        already_logged = true;
+    }
+    self.device.cmdBindVertexBuffers(command_buffer, 0, &.{self.vertex_buffer}, &.{0});
     const view_port = vk.Viewport{
         .x = 0,
         .y = 0,
@@ -650,14 +718,13 @@ fn recordCommandBuffer(self: *App, command_buffer: vk.CommandBuffer, image_index
         .min_depth = 0,
         .max_depth = 1,
     };
-    // app_log.debug("View port width {d}", .{view_port.width});
     const scissor = vk.Rect2D{
         .offset = .{ .x = 0, .y = 0 },
         .extent = self.swap_chain_extent,
     };
     self.device.cmdSetViewport(command_buffer, 0, &.{view_port});
     self.device.cmdSetScissor(command_buffer, 0, &.{scissor});
-    self.device.cmdDraw(command_buffer, 3, 1, 0, 0);
+    self.device.cmdDraw(command_buffer, @intCast(vertices.len), 1, 0, 0);
     self.device.cmdEndRendering(command_buffer);
     transition_image_layout_params.old_layout = .color_attachment_optimal;
     transition_image_layout_params.new_layout = .present_src_khr;
@@ -813,6 +880,8 @@ fn cleanupSwapChain(self: *App, alloc: Alloc) void {
 }
 
 fn cleanup(self: *App, alloc: Alloc) void {
+    self.device.destroyBuffer(self.vertex_buffer, null);
+    self.device.freeMemory(self.vertex_buffer_memory, null);
     self.device.destroyCommandPool(self.command_pool, null);
     self.device.destroyPipeline(self.graphics_pipeline, null);
     self.device.destroyPipelineLayout(self.pipeline_layout, null);
