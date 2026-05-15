@@ -608,32 +608,52 @@ fn createCommandPool(self: *App) !void {
     self.command_pool = try self.device.createCommandPool(&pool_info, null);
 }
 
-fn createVertexBuffer(self: *App) !void {
+fn createBuffer(
+    size: vk.DeviceSize,
+    usage: vk.BufferUsageFlags,
+    properties: vk.MemoryPropertyFlags,
+    instance: *vk.InstanceProxy,
+    physical_device: *vk.PhysicalDevice,
+    device: *vk.DeviceProxy,
+    buffer: *vk.Buffer,
+    buffer_memory: *vk.DeviceMemory,
+) !void {
     const buffer_info = vk.BufferCreateInfo{
-        .size = @sizeOf(Vertex) * vertices.len,
-        .usage = .{ .vertex_buffer_bit = true },
+        .size = size,
+        .usage = usage,
         .sharing_mode = .exclusive,
     };
-    self.vertex_buffer = try self.device.createBuffer(&buffer_info, null);
-    const mem_requirements = self.device.getBufferMemoryRequirements(self.vertex_buffer);
+    buffer.* = try device.createBuffer(&buffer_info, null);
+    const mem_requirements = device.getBufferMemoryRequirements(buffer.*);
     const memory_allocate_info = vk.MemoryAllocateInfo{
         .allocation_size = mem_requirements.size,
-        .memory_type_index = try self.findMemoryType(mem_requirements.memory_type_bits, vk.MemoryPropertyFlags{
-            .host_visible_bit = true,
-            .host_coherent_bit = true,
-        }),
+        .memory_type_index = try findMemoryType(instance, physical_device, mem_requirements.memory_type_bits, properties),
     };
-    self.vertex_buffer_memory = try self.device.allocateMemory(&memory_allocate_info, null);
-    try self.device.bindBufferMemory(self.vertex_buffer, self.vertex_buffer_memory, 0);
-    const data = try self.device.mapMemory(self.vertex_buffer_memory, 0, buffer_info.size, .{});
+    buffer_memory.* = try device.allocateMemory(&memory_allocate_info, null);
+    try device.bindBufferMemory(buffer.*, buffer_memory.*, 0);
+}
+
+fn createVertexBuffer(self: *App) !void {
+    const buffer_size: vk.DeviceSize = @sizeOf(Vertex) * vertices.len;
+    try createBuffer(
+        buffer_size,
+        .{ .vertex_buffer_bit = true, .transfer_src_bit = true },
+        .{ .host_visible_bit = true, .host_coherent_bit = true },
+        &self.instance,
+        &self.physical_device,
+        &self.device,
+        &self.vertex_buffer,
+        &self.vertex_buffer_memory,
+    );
+    const data = try self.device.mapMemory(self.vertex_buffer_memory, 0, buffer_size, .{});
     const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
 
     @memcpy(gpu_vertices, vertices[0..]);
     self.device.unmapMemory(self.vertex_buffer_memory);
 }
 
-fn findMemoryType(self: *App, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
-    const mem_properties = self.instance.getPhysicalDeviceMemoryProperties(self.physical_device);
+fn findMemoryType(instance: *vk.InstanceProxy, physical_device: *vk.PhysicalDevice, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
+    const mem_properties = instance.getPhysicalDeviceMemoryProperties(physical_device.*);
     for (0..mem_properties.memory_type_count) |i| {
         if ((type_filter & @as(u32, 1) << @truncate(i) != 0) and (mem_properties.memory_types[i].property_flags.contains(properties))) {
             return @truncate(i);
