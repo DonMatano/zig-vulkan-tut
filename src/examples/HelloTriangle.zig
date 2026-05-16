@@ -43,6 +43,8 @@ graphics_pipeline: vk.Pipeline = undefined,
 command_pool: vk.CommandPool = undefined,
 vertex_buffer: vk.Buffer = undefined,
 vertex_buffer_memory: vk.DeviceMemory = undefined,
+index_buffer: vk.Buffer = undefined,
+index_buffer_memory: vk.DeviceMemory = undefined,
 frame_index: u32 = 0,
 frame_buffer_resized: bool = false,
 
@@ -61,10 +63,13 @@ const Vertex = struct {
 };
 
 const vertices = [_]Vertex{
-    .{ .pos = .{ 0, -0.5 }, .color = .{ 1, 0, 0 } },
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 1, 0 } },
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1, 0, 0 } },
+    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0, 1, 0 } },
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0, 0, 1 } },
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1, 1, 1 } },
 };
+
+const indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
 
 const App = @This();
 
@@ -116,6 +121,7 @@ fn initVulkan(self: *App, alloc: Alloc) !void {
     try self.createImageViews(alloc);
     try self.createCommandPool();
     try self.createVertexBuffer();
+    try self.createIndexBuffer();
     try self.createGraphicsPipeline();
 }
 
@@ -671,6 +677,44 @@ fn createVertexBuffer(self: *App) !void {
     self.device.destroyBuffer(staging_buffer, null);
     self.device.freeMemory(staging_buffer_memory, null);
 }
+fn createIndexBuffer(self: *App) !void {
+    const buffer_size: vk.DeviceSize = @sizeOf(@TypeOf(indices[0])) * indices.len;
+    var staging_buffer: vk.Buffer = undefined;
+    var staging_buffer_memory: vk.DeviceMemory = undefined;
+    try createBuffer(
+        buffer_size,
+        // .{ .vertex_buffer_bit = true, .transfer_src_bit = true },
+        .{ .transfer_src_bit = true },
+        .{ .host_visible_bit = true, .host_coherent_bit = true },
+        &self.instance,
+        &self.physical_device,
+        &self.device,
+        &staging_buffer,
+        &staging_buffer_memory,
+    );
+    errdefer {
+        self.device.destroyBuffer(staging_buffer, null);
+        self.device.freeMemory(staging_buffer_memory, null);
+    }
+    const data_staging = try self.device.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
+    const gpu_indices: [*]u16 = @ptrCast(@alignCast(data_staging));
+
+    @memcpy(gpu_indices, indices[0..]);
+    self.device.unmapMemory(staging_buffer_memory);
+    try createBuffer(
+        buffer_size,
+        .{ .index_buffer_bit = true, .transfer_dst_bit = true },
+        .{ .device_local_bit = true },
+        &self.instance,
+        &self.physical_device,
+        &self.device,
+        &self.index_buffer,
+        &self.index_buffer_memory,
+    );
+    try copyCommand(&self.device, &self.queue.handle, &staging_buffer, &self.index_buffer, self.command_pool, buffer_size);
+    self.device.destroyBuffer(staging_buffer, null);
+    self.device.freeMemory(staging_buffer_memory, null);
+}
 
 fn findMemoryType(instance: *vk.InstanceProxy, physical_device: *vk.PhysicalDevice, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
     const mem_properties = instance.getPhysicalDeviceMemoryProperties(physical_device.*);
@@ -792,6 +836,7 @@ fn recordCommandBuffer(self: *App, command_buffer: vk.CommandBuffer, image_index
         already_logged = true;
     }
     self.device.cmdBindVertexBuffers(command_buffer, 0, &.{self.vertex_buffer}, &.{0});
+    self.device.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, .uint16);
     const view_port = vk.Viewport{
         .x = 0,
         .y = 0,
@@ -806,7 +851,8 @@ fn recordCommandBuffer(self: *App, command_buffer: vk.CommandBuffer, image_index
     };
     self.device.cmdSetViewport(command_buffer, 0, &.{view_port});
     self.device.cmdSetScissor(command_buffer, 0, &.{scissor});
-    self.device.cmdDraw(command_buffer, @intCast(vertices.len), 1, 0, 0);
+    // self.device.cmdDraw(command_buffer, @intCast(vertices.len), 1, 0, 0);
+    self.device.cmdDrawIndexed(command_buffer, @intCast(indices.len), 1, 0, 0, 0);
     self.device.cmdEndRendering(command_buffer);
     transition_image_layout_params.old_layout = .color_attachment_optimal;
     transition_image_layout_params.new_layout = .present_src_khr;
@@ -962,6 +1008,8 @@ fn cleanupSwapChain(self: *App, alloc: Alloc) void {
 }
 
 fn cleanup(self: *App, alloc: Alloc) void {
+    self.device.destroyBuffer(self.index_buffer, null);
+    self.device.freeMemory(self.index_buffer_memory, null);
     self.device.destroyBuffer(self.vertex_buffer, null);
     self.device.freeMemory(self.vertex_buffer_memory, null);
     self.device.destroyCommandPool(self.command_pool, null);
