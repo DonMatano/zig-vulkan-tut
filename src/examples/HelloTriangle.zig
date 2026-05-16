@@ -635,21 +635,41 @@ fn createBuffer(
 
 fn createVertexBuffer(self: *App) !void {
     const buffer_size: vk.DeviceSize = @sizeOf(Vertex) * vertices.len;
+    var staging_buffer: vk.Buffer = undefined;
+    var staging_buffer_memory: vk.DeviceMemory = undefined;
     try createBuffer(
         buffer_size,
-        .{ .vertex_buffer_bit = true, .transfer_src_bit = true },
+        // .{ .vertex_buffer_bit = true, .transfer_src_bit = true },
+        .{ .transfer_src_bit = true },
         .{ .host_visible_bit = true, .host_coherent_bit = true },
+        &self.instance,
+        &self.physical_device,
+        &self.device,
+        &staging_buffer,
+        &staging_buffer_memory,
+    );
+    errdefer {
+        self.device.destroyBuffer(staging_buffer, null);
+        self.device.freeMemory(staging_buffer_memory, null);
+    }
+    const data_staging = try self.device.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
+    const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data_staging));
+
+    @memcpy(gpu_vertices, vertices[0..]);
+    self.device.unmapMemory(staging_buffer_memory);
+    try createBuffer(
+        buffer_size,
+        .{ .vertex_buffer_bit = true, .transfer_dst_bit = true },
+        .{ .device_local_bit = true },
         &self.instance,
         &self.physical_device,
         &self.device,
         &self.vertex_buffer,
         &self.vertex_buffer_memory,
     );
-    const data = try self.device.mapMemory(self.vertex_buffer_memory, 0, buffer_size, .{});
-    const gpu_vertices: [*]Vertex = @ptrCast(@alignCast(data));
-
-    @memcpy(gpu_vertices, vertices[0..]);
-    self.device.unmapMemory(self.vertex_buffer_memory);
+    try copyCommand(&self.device, &self.queue.handle, &staging_buffer, &self.vertex_buffer, self.command_pool, buffer_size);
+    self.device.destroyBuffer(staging_buffer, null);
+    self.device.freeMemory(staging_buffer_memory, null);
 }
 
 fn findMemoryType(instance: *vk.InstanceProxy, physical_device: *vk.PhysicalDevice, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
@@ -660,6 +680,48 @@ fn findMemoryType(instance: *vk.InstanceProxy, physical_device: *vk.PhysicalDevi
         }
     }
     return error.NoSuitableMemoryType;
+}
+
+fn copyCommand(
+    device: *vk.DeviceProxy,
+    queue: *vk.Queue,
+    src_buffer: *vk.Buffer,
+    dst_buffer: *vk.Buffer,
+    command_pool: vk.CommandPool,
+    size: vk.DeviceSize,
+) !void {
+    const com_alloc_info = vk.CommandBufferAllocateInfo{
+        .command_pool = command_pool,
+        .level = .primary,
+        .command_buffer_count = 1,
+    };
+    var command_buffer_handle: vk.CommandBuffer = undefined;
+
+    try device.allocateCommandBuffers(&com_alloc_info, @ptrCast(&command_buffer_handle));
+    errdefer {
+        device.freeCommandBuffers(command_pool, &.{command_buffer_handle});
+    }
+
+    const command_buffer = vk.CommandBufferProxy.init(command_buffer_handle, device.wrapper);
+    const begin_info = vk.CommandBufferBeginInfo{
+        .flags = .{ .one_time_submit_bit = true },
+    };
+    try command_buffer.beginCommandBuffer(&begin_info);
+    const copy_region = vk.BufferCopy{
+        .src_offset = 0,
+        .dst_offset = 0,
+        .size = size,
+    };
+    command_buffer.copyBuffer(src_buffer.*, dst_buffer.*, &.{copy_region});
+    try command_buffer.endCommandBuffer();
+
+    const submit_info = vk.SubmitInfo{
+        .command_buffer_count = 1,
+        .p_command_buffers = &.{command_buffer_handle},
+    };
+    try device.queueSubmit(queue.*, &.{submit_info}, .null_handle);
+    try device.queueWaitIdle(queue.*);
+    device.freeCommandBuffers(command_pool, &.{command_buffer.handle});
 }
 
 fn createCommandBuffers(self: *App, command_buffers: *[MAX_INFLIGHT_FRAMES]vk.CommandBuffer) !void {
